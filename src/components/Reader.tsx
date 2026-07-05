@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { saveCover, setTotalPages, updateProgress, type Book } from "../api";
-import { isPasswordError, openPdf, renderCoverPng, type PDFDocumentProxy } from "../pdf";
+import { isPasswordError, openPdf, pdfjs, renderCoverPng, type PDFDocumentProxy } from "../pdf";
+import { cleanWord, localDictSource, type LookupResult } from "../dict";
+import WordPopup, { type PopupAnchor } from "./WordPopup";
 
 interface Props {
   book: Book;
@@ -32,15 +34,26 @@ export default function Reader({ book, onBack }: Props) {
   const [pageInput, setPageInput] = useState("1");
   const [displayScale, setDisplayScale] = useState(1);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
+  const [popup, setPopup] = useState<{ result: LookupResult; anchor: PopupAnchor } | null>(null);
+  const [toast, setToast] = useState("");
 
   const containerRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PDFDocumentProxy | null>(null);
   const canvas1Ref = useRef<HTMLCanvasElement>(null);
   const canvas2Ref = useRef<HTMLCanvasElement>(null);
+  const text1Ref = useRef<HTMLDivElement>(null);
+  const text2Ref = useRef<HTMLDivElement>(null);
+  const wrap2Ref = useRef<HTMLDivElement>(null);
   const lastScaleRef = useRef(1);
   const pageRef = useRef(1);
   const lastFlipAtRef = useRef(0);
+  const popupRef = useRef(popup);
+  const isScannedRef = useRef(false);
+  const scanToastShownRef = useRef(false);
+  const popupJustClosedRef = useRef(false);
   const step = twoPage ? 2 : 1;
+
+  popupRef.current = popup;
 
   // ---------- 文档加载（含密码重试） ----------
   const loadDoc = useCallback(
@@ -68,6 +81,10 @@ export default function Reader({ book, onBack }: Props) {
             .catch(() => {});
         }
         loadOutline(d).then(setOutline);
+        // 扫描版检测：前 1–2 页文字层近似为空则判定为扫描版（仅影响取词提示文案）
+        detectScanned(d).then((scanned) => {
+          isScannedRef.current = scanned;
+        });
       } catch (e) {
         if (isPasswordError(e)) {
           setPasswordError(password ? "密码错误，请重试" : "");
@@ -149,7 +166,8 @@ export default function Reader({ book, onBack }: Props) {
           gotoPage(numPages);
           break;
         case "Escape":
-          goBack();
+          if (popupRef.current) setPopup(null);
+          else goBack();
           break;
       }
     }
@@ -184,6 +202,77 @@ export default function Reader({ book, onBack }: Props) {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [next, prev]);
+
+  // 翻页 / 缩放 / 视图切换时自动关闭取词弹窗
+  useEffect(() => {
+    setPopup(null);
+  }, [page, zoom, customScale, twoPage]);
+
+  // 页面内滚动时关闭弹窗（弹窗定位基于屏幕坐标，滚动后会错位）
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (popupRef.current) setPopup(null);
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // 提示 toast 自动消失
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // ---------- 取词 ----------
+  const onDoubleClick = useCallback(async () => {
+    if (isScannedRef.current) {
+      if (!scanToastShownRef.current) {
+        scanToastShownRef.current = true;
+        setToast("本书为扫描版，暂不支持取词");
+      }
+      return;
+    }
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const word = cleanWord(sel.toString());
+    if (!word) return;
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return;
+    const result = await localDictSource.lookup(word);
+    setPopup({
+      result,
+      anchor: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+    });
+  }, []);
+
+  // 点击弹窗以外区域关闭弹窗（弹窗内部 mousedown 已 stopPropagation）
+  const onContainerMouseDown = useCallback(() => {
+    if (popupRef.current) {
+      setPopup(null);
+      popupJustClosedRef.current = true;
+    }
+  }, []);
+
+  // 点击左右翻页区（文字上的点击不翻页，留给选词）
+  const onContainerClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (popupJustClosedRef.current) {
+        popupJustClosedRef.current = false;
+        return;
+      }
+      if ((e.target as HTMLElement).closest(".textLayer")) return;
+      const el = containerRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const rel = (e.clientX - r.left) / r.width;
+      if (rel < 0.22) prev();
+      else if (rel > 0.78) next();
+    },
+    [prev, next]
+  );
 
   // 容器尺寸变化时重新计算适配缩放
   useEffect(() => {
@@ -225,11 +314,15 @@ export default function Reader({ book, onBack }: Props) {
 
       const dpr = window.devicePixelRatio || 1;
       const canvases = [canvas1Ref.current, canvas2Ref.current];
-      canvases[1]!.style.display = proxies.length > 1 ? "block" : "none";
+      const textDivs = [text1Ref.current, text2Ref.current];
+      if (wrap2Ref.current) {
+        wrap2Ref.current.style.display = proxies.length > 1 ? "block" : "none";
+      }
 
       for (let i = 0; i < proxies.length; i++) {
         const canvas = canvases[i];
-        if (!canvas || cancelled) return;
+        const textDiv = textDivs[i];
+        if (!canvas || !textDiv || cancelled) return;
         const vp = proxies[i].getViewport({ scale: scale * dpr });
         canvas.width = Math.floor(vp.width);
         canvas.height = Math.floor(vp.height);
@@ -244,6 +337,24 @@ export default function Reader({ book, onBack }: Props) {
           await task.promise;
         } catch {
           return; // 渲染被取消
+        }
+        if (cancelled) return;
+        // 透明文字层：让双击可以选中单词（取词功能的基础）
+        const vpText = proxies[i].getViewport({ scale });
+        textDiv.replaceChildren();
+        textDiv.style.width = `${Math.floor(vp.width / dpr)}px`;
+        textDiv.style.height = `${Math.floor(vp.height / dpr)}px`;
+        textDiv.style.setProperty("--scale-factor", String(scale));
+        const textLayer = new pdfjs.TextLayer({
+          textContentSource: proxies[i].streamTextContent(),
+          container: textDiv,
+          viewport: vpText,
+        });
+        tasks.push(textLayer);
+        try {
+          await textLayer.render();
+        } catch {
+          return; // 文字层渲染被取消（扫描版无文字层时正常完成但为空）
         }
       }
     })();
@@ -347,16 +458,34 @@ export default function Reader({ book, onBack }: Props) {
             <OutlineTree nodes={outline} onGoto={gotoPage} current={page} />
           </aside>
         )}
-        <div className="page-container" ref={containerRef}>
+        <div
+          className="page-container"
+          ref={containerRef}
+          onDoubleClick={onDoubleClick}
+          onMouseDown={onContainerMouseDown}
+          onClick={onContainerClick}
+        >
           <div className="page-stage">
-            <canvas ref={canvas1Ref} />
-            <canvas ref={canvas2Ref} style={{ display: "none" }} />
+            <div className="page-wrap">
+              <canvas ref={canvas1Ref} />
+              <div className="textLayer" ref={text1Ref} />
+            </div>
+            <div className="page-wrap" ref={wrap2Ref} style={{ display: "none" }}>
+              <canvas ref={canvas2Ref} />
+              <div className="textLayer" ref={text2Ref} />
+            </div>
           </div>
-          <div className="nav-zone nav-left" onClick={prev} title="上一页" />
-          <div className="nav-zone nav-right" onClick={next} title="下一页" />
           {!doc && <div className="loading-hint">正在打开…</div>}
+          {toast && <div className="reader-toast">{toast}</div>}
         </div>
       </div>
+      {popup && (
+        <WordPopup
+          result={popup.result}
+          anchor={popup.anchor}
+          onClose={() => setPopup(null)}
+        />
+      )}
     </div>
   );
 }
@@ -429,6 +558,24 @@ function OutlineTree({
       ))}
     </ul>
   );
+}
+
+/** 前 1–2 页文字层字符数近似为 0 → 判定为扫描版。误判成本仅为提示文案，不追求 100% 准确。 */
+async function detectScanned(doc: PDFDocumentProxy): Promise<boolean> {
+  try {
+    let chars = 0;
+    for (let p = 1; p <= Math.min(2, doc.numPages); p++) {
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent();
+      for (const item of tc.items) {
+        if ("str" in item) chars += item.str.trim().length;
+      }
+      if (chars >= 20) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function loadOutline(doc: PDFDocumentProxy): Promise<OutlineNode[]> {

@@ -9,6 +9,8 @@ use tauri::{Manager, State};
 
 struct AppState {
     db: Mutex<Connection>,
+    /// 只读词典库；缺失时为 None，查词一律返回未找到
+    dict: Mutex<Option<Connection>>,
     books_dir: PathBuf,
     covers_dir: PathBuf,
 }
@@ -253,6 +255,162 @@ fn save_cover(hash: String, data: Vec<u8>, state: State<AppState>) -> Result<Str
     Ok(path_str)
 }
 
+#[derive(Serialize)]
+struct LookupResult {
+    found: bool,
+    word: String,
+    lemma: Option<String>,
+    phonetic: Option<String>,
+    translation: Option<String>,
+}
+
+/// 简单后缀剥离规则：forms 表未命中时的兜底（-s/-es/-ies/-ing/-ed/-er/-est 等）
+fn suffix_candidates(w: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: String| {
+        if s.len() >= 2 && !out.contains(&s) {
+            out.push(s);
+        }
+    };
+    let dedup_double = |b: &str| -> Option<String> {
+        let bytes = b.as_bytes();
+        if bytes.len() >= 2 && bytes[bytes.len() - 1] == bytes[bytes.len() - 2] {
+            Some(b[..b.len() - 1].to_string())
+        } else {
+            None
+        }
+    };
+    if let Some(b) = w.strip_suffix("ies") {
+        push(format!("{b}y"));
+    }
+    if let Some(b) = w.strip_suffix("es") {
+        push(b.to_string());
+    }
+    if let Some(b) = w.strip_suffix('s') {
+        push(b.to_string());
+    }
+    for suf in ["ing", "ed"] {
+        if let Some(b) = w.strip_suffix(suf) {
+            push(b.to_string());
+            push(format!("{b}e"));
+            if let Some(d) = dedup_double(b) {
+                push(d);
+            }
+        }
+    }
+    if let Some(b) = w.strip_suffix("iest") {
+        push(format!("{b}y"));
+    }
+    if let Some(b) = w.strip_suffix("ier") {
+        push(format!("{b}y"));
+    }
+    for suf in ["est", "er"] {
+        if let Some(b) = w.strip_suffix(suf) {
+            push(b.to_string());
+            push(format!("{b}e"));
+            if let Some(d) = dedup_double(b) {
+                push(d);
+            }
+        }
+    }
+    out
+}
+
+#[tauri::command]
+fn lookup_word(word: String, state: State<AppState>) -> LookupResult {
+    let guard = state.dict.lock().unwrap();
+    do_lookup(guard.as_ref(), &word)
+}
+
+fn do_lookup(dict: Option<&Connection>, word: &str) -> LookupResult {
+    let original = word.trim().to_string();
+    let miss = |w: String| LookupResult {
+        found: false,
+        word: w,
+        lemma: None,
+        phonetic: None,
+        translation: None,
+    };
+    if original.is_empty() || original.len() > 50 {
+        return miss(original);
+    }
+    let w = original.to_lowercase();
+    if !w
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c == '\'' || c == '-')
+    {
+        return miss(original);
+    }
+
+    let Some(db) = dict else {
+        return miss(original);
+    };
+
+    let get = |target: &str| -> Option<(Option<String>, String)> {
+        db.query_row(
+            "SELECT phonetic, translation FROM entries WHERE word = ?1",
+            [target],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()
+    };
+
+    // ① 精确命中
+    if let Some((phonetic, translation)) = get(&w) {
+        return LookupResult {
+            found: true,
+            word: original,
+            lemma: None,
+            phonetic,
+            translation: Some(translation),
+        };
+    }
+    // ② forms 反查词形还原
+    if let Ok(lemma) =
+        db.query_row("SELECT lemma FROM forms WHERE form = ?1", [&w], |r| {
+            r.get::<_, String>(0)
+        })
+    {
+        if let Some((phonetic, translation)) = get(&lemma) {
+            return LookupResult {
+                found: true,
+                word: original,
+                lemma: Some(lemma),
+                phonetic,
+                translation: Some(translation),
+            };
+        }
+    }
+    // ③ 后缀规则兜底
+    for cand in suffix_candidates(&w) {
+        if let Some((phonetic, translation)) = get(&cand) {
+            return LookupResult {
+                found: true,
+                word: original,
+                lemma: Some(cand),
+                phonetic,
+                translation: Some(translation),
+            };
+        }
+    }
+    miss(original)
+}
+
+fn open_dict(app: &tauri::App, base: &Path) -> Option<Connection> {
+    use tauri::path::BaseDirectory;
+    // 用户目录的 dict.db 优先（可手动替换升级），否则用安装目录内置资源
+    let user_dict = base.join("dict.db");
+    let path = if user_dict.is_file() {
+        user_dict
+    } else {
+        app.path()
+            .resolve("resources/dict.db", BaseDirectory::Resource)
+            .ok()
+            .filter(|p| p.is_file())?
+    };
+    Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok()
+}
+
 fn init_db(base: &Path) -> Result<Connection, Box<dyn std::error::Error>> {
     let db = Connection::open(base.join("library.db"))?;
     // WAL：保证强杀进程时已提交的进度不丢
@@ -273,6 +431,82 @@ fn init_db(base: &Path) -> Result<Connection, Box<dyn std::error::Error>> {
     Ok(db)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dict() -> Connection {
+        Connection::open_with_flags(
+            "resources/dict.db",
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .expect("测试需要 resources/dict.db 存在")
+    }
+
+    #[test]
+    fn exact_hit() {
+        let db = dict();
+        let r = do_lookup(Some(&db), "hello");
+        assert!(r.found);
+        assert!(r.lemma.is_none());
+        assert!(r.translation.unwrap().contains("喂"));
+    }
+
+    #[test]
+    fn case_insensitive_and_lemma() {
+        let db = dict();
+        // 句首大写
+        let r = do_lookup(Some(&db), "The");
+        assert!(r.found);
+        // 变形词：要么本身是词条（精确命中，lemma 为空），要么正确还原到原形
+        for (form, lemma) in [
+            ("running", "run"),
+            ("studies", "study"),
+            ("went", "go"),
+            ("better", "good"),
+            ("children", "child"),
+            ("abandons", "abandon"),
+        ] {
+            let r = do_lookup(Some(&db), form);
+            assert!(r.found, "{form} 应命中");
+            if let Some(l) = r.lemma.as_deref() {
+                assert_eq!(l, lemma, "{form} 应还原为 {lemma}");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_input_rejected() {
+        let db = dict();
+        for bad in ["", "你好", "123", "  ", "hello world", "a@b"] {
+            assert!(!do_lookup(Some(&db), bad).found, "{bad:?} 不应命中");
+        }
+        let long = "a".repeat(51);
+        assert!(!do_lookup(Some(&db), &long).found);
+    }
+
+    #[test]
+    fn not_found_word() {
+        let db = dict();
+        let r = do_lookup(Some(&db), "zzzzqqq");
+        assert!(!r.found);
+        assert_eq!(r.word, "zzzzqqq");
+    }
+
+    #[test]
+    fn missing_dict_degrades() {
+        assert!(!do_lookup(None, "hello").found);
+    }
+
+    #[test]
+    fn suffix_rules() {
+        assert!(suffix_candidates("boxes").contains(&"box".to_string()));
+        assert!(suffix_candidates("running").contains(&"run".to_string()));
+        assert!(suffix_candidates("hoping").contains(&"hope".to_string()));
+        assert!(suffix_candidates("happiest").contains(&"happy".to_string()));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -290,8 +524,10 @@ pub fn run() {
             scope.allow_directory(&books_dir, true)?;
             scope.allow_directory(&covers_dir, true)?;
             let db = init_db(&base)?;
+            let dict = open_dict(app, &base);
             app.manage(AppState {
                 db: Mutex::new(db),
+                dict: Mutex::new(dict),
                 books_dir,
                 covers_dir,
             });
@@ -304,7 +540,8 @@ pub fn run() {
             update_progress,
             rename_book,
             set_total_pages,
-            save_cover
+            save_cover,
+            lookup_word
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
