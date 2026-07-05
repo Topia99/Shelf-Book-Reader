@@ -415,6 +415,7 @@ button {
   min-width: 100%;
 }
 .page-stage canvas {
+  display: block;
   background: #fff;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
@@ -433,6 +434,9 @@ button {
   transform-origin: 0 0;
   caret-color: transparent;
   z-index: 2;
+  /* 全局 user-select: none 会禁掉双击选词，这里必须单独放开 */
+  user-select: text;
+  -webkit-user-select: text;
 }
 .textLayer :is(span, br) {
   color: transparent;

@@ -241,11 +241,15 @@ export default function Reader({ book, onBack }: Props) {
     if (!word) return;
     const rect = sel.getRangeAt(0).getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return;
-    const result = await localDictSource.lookup(word);
-    setPopup({
-      result,
-      anchor: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
-    });
+    try {
+      const result = await localDictSource.lookup(word);
+      setPopup({
+        result,
+        anchor: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+      });
+    } catch {
+      setToast("查词失败，请重试");
+    }
   }, []);
 
   // 点击弹窗以外区域关闭弹窗（弹窗内部 mousedown 已 stopPropagation）
