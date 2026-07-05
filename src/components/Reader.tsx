@@ -470,13 +470,15 @@ export default function Reader({ book, onBack }: Props) {
           onClick={onContainerClick}
         >
           <div className="page-stage">
+            {/* lang="en"：html 是 zh-CN，会让 span 的通用 sans-serif 解析成中文字体
+                （拉丁字母比 PDF.js 测量用的 Arial 宽 ~12%），导致选词层横向漂移选错词 */}
             <div className="page-wrap">
               <canvas ref={canvas1Ref} />
-              <div className="textLayer" ref={text1Ref} />
+              <div className="textLayer" lang="en" ref={text1Ref} />
             </div>
             <div className="page-wrap" ref={wrap2Ref} style={{ display: "none" }}>
               <canvas ref={canvas2Ref} />
-              <div className="textLayer" ref={text2Ref} />
+              <div className="textLayer" lang="en" ref={text2Ref} />
             </div>
           </div>
           {!doc && <div className="loading-hint">正在打开…</div>}

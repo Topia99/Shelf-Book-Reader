@@ -6,6 +6,14 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 1420
+    },
+    {
+      "name": "select-test",
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+      "runtimeArgs": [
+        "C:\\Users\\12429\\AppData\\Local\\Temp\\claude\\C--Users-12429-OneDrive-Documents-BookReader\\90d97bba-f84f-4d09-8443-1e543e5653bf\\scratchpad\\select-test\\server.mjs"
+      ],
+      "port": 5177
     }
   ]
 }
