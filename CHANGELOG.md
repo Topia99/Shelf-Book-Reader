@@ -2,6 +2,13 @@
 
 ## [未发布] - MVP 开发中
 
+### 2026-07-04（下午）
+- 修复：asset 协议 403 导致无法打开 PDF/显示封面（改为启动时用运行时 API 将
+  books/covers 目录加入白名单，不依赖配置 glob）
+- 阅读器打开时自动补生成缺失的封面与总页数
+- NSIS 安装包：当前用户级安装（免管理员）、中文安装界面、自动创建桌面图标
+- README（安装、快捷键、FAQ）；代码推送 GitHub
+
 ### 2026-07-04
 - 项目初始化：Tauri 2 + React + TypeScript + PDF.js + SQLite（rusqlite）
 - T1 项目骨架：SQLite 初始化（WAL 模式）、dialog 插件、asset 协议（大文件 Range 读取）
