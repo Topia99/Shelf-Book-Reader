@@ -437,10 +437,10 @@ fn resolve_base_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
     // 旧版本硬编码使用 %APPDATA%\Shelf，这里做一次性迁移，避免老用户升级后读不到原数据。
     let new_base = app.path().app_data_dir()?;
     let old_base = PathBuf::from(std::env::var("APPDATA")?).join("Shelf");
-    if old_base.exists() && !new_base.exists() {
-        if fs::rename(&old_base, &new_base).is_err() {
-            return Ok(old_base);
-        }
+    let should_migrate = old_base.exists() && !new_base.exists();
+    if should_migrate && fs::rename(&old_base, &new_base).is_err() {
+        // 迁移失败则继续使用旧目录，保证老用户数据可用
+        return Ok(old_base);
     }
     Ok(new_base)
 }

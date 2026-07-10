@@ -27,7 +27,7 @@
 | P0-2 | 跨平台假设审计 | ✅ | Codex 窗口2 | 20 条清单（4 阻塞/13 重要/3 次要）→ [docs/跨平台审计清单.md](docs/跨平台审计清单.md) |
 | P0-3 | 快捷键抽象层（src/platform.ts） | ✅ | Codex 窗口3 | tsc 通过；Reader 滚轮缩放已接入 |
 | P0-4 | tauri.conf.json 修复（+app/dmg 目标、+icns、scope 对齐） | ✅ | Codex 窗口4 | JSON 校验通过 |
-| P0-5 | CI 工作流（前端 + Win/mac 双平台 Rust） | ✅ | Codex 窗口5 | YAML 校验通过；本地等效构建通过；**GitHub 实跑验证进行中** |
+| P0-5 | CI 工作流（前端 + Win/mac 双平台 Rust） | ✅ | Codex 窗口5 | YAML 校验通过；GitHub 实跑首轮 Windows clippy 失败（collapsible_if），修复后二轮验证 |
 
 审计清单遗留项流向：触屏交互阻塞项 → P4-4/P4-5；配置项已由 P0-4 消化；platform.ts UA 判断的健壮性 → P4-1 时复核。
 
@@ -120,5 +120,6 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-08**：CI 首轮实跑：Frontend ✅、Rust-macOS ✅、Rust-Windows ❌（P0-1 的 cfg(windows) 迁移函数触发 clippy collapsible_if，本地 Mac 编译不到该分支所以未暴露——印证了"必须 GitHub 实跑"的要求）。已用最小复现 crate 定位并修复，二轮 CI 验证中。
 - **2026-07-08**：阶段 0 全部完成。5 个 Codex 窗口两波并行交付（波1：P0-1/P0-2/P0-3；波2：P0-4/P0-5），全部一次验收通过。发现并修复关键坑：Windows 老用户数据目录迁移（%APPDATA%\Shelf → com.shelf.reader）。CI 推送后待 GitHub 实跑验证 Windows 编译。
 - **2026-07-08**：《全平台开发文档》《implementation_plan.md》定稿入库；Codex CLI 分派通道验证可用。
