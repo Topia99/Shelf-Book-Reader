@@ -5,7 +5,7 @@
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
 **最后更新**：2026-07-08
-**当前阶段**：阶段 0 ✅ 完成 → 下一步：阶段 1（macOS 版）与阶段 2（云服务）可并行开工
+**当前阶段**：阶段 0 ✅ 完成（CI 三 job 全绿；剩 Windows 真机手动回归由用户执行）→ 下一步：阶段 1（macOS 版）与阶段 2（云服务）可并行开工
 **里程碑**：M1 Mac 版可用 ⏳｜M2 双端接着读 ⏳｜M3 TestFlight 可分享 ⏳｜M4 商店上线 ⏳
 
 ---
@@ -27,7 +27,7 @@
 | P0-2 | 跨平台假设审计 | ✅ | Codex 窗口2 | 20 条清单（4 阻塞/13 重要/3 次要）→ [docs/跨平台审计清单.md](docs/跨平台审计清单.md) |
 | P0-3 | 快捷键抽象层（src/platform.ts） | ✅ | Codex 窗口3 | tsc 通过；Reader 滚轮缩放已接入 |
 | P0-4 | tauri.conf.json 修复（+app/dmg 目标、+icns、scope 对齐） | ✅ | Codex 窗口4 | JSON 校验通过 |
-| P0-5 | CI 工作流（前端 + Win/mac 双平台 Rust） | ✅ | Codex 窗口5 | YAML 校验通过；GitHub 实跑首轮 Windows clippy 失败（collapsible_if），修复后二轮验证 |
+| P0-5 | CI 工作流（前端 + Win/mac 双平台 Rust） | ✅ | Codex 窗口5 | GitHub 实跑三 job 全绿（[run 29127549159](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29127549159)）；首轮 Windows clippy 打回一次已修复 |
 
 审计清单遗留项流向：触屏交互阻塞项 → P4-4/P4-5；配置项已由 P0-4 消化；platform.ts UA 判断的健壮性 → P4-1 时复核。
 
