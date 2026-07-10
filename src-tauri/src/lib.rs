@@ -431,6 +431,25 @@ fn init_db(base: &Path) -> Result<Connection, Box<dyn std::error::Error>> {
     Ok(db)
 }
 
+#[cfg(windows)]
+fn resolve_base_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Tauri 2 会把应用数据目录解析到 %APPDATA%\com.shelf.reader。
+    // 旧版本硬编码使用 %APPDATA%\Shelf，这里做一次性迁移，避免老用户升级后读不到原数据。
+    let new_base = app.path().app_data_dir()?;
+    let old_base = PathBuf::from(std::env::var("APPDATA")?).join("Shelf");
+    if old_base.exists() && !new_base.exists() {
+        if fs::rename(&old_base, &new_base).is_err() {
+            return Ok(old_base);
+        }
+    }
+    Ok(new_base)
+}
+
+#[cfg(not(windows))]
+fn resolve_base_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(app.path().app_data_dir()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,8 +531,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let appdata = std::env::var("APPDATA").expect("APPDATA 环境变量不存在");
-            let base = PathBuf::from(appdata).join("Shelf");
+            let base = resolve_base_dir(app)?;
             let books_dir = base.join("books");
             let covers_dir = base.join("covers");
             fs::create_dir_all(&books_dir)?;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { saveCover, setTotalPages, updateProgress, type Book } from "../api";
 import { isPasswordError, openPdf, pdfjs, renderCoverPng, type PDFDocumentProxy } from "../pdf";
 import { cleanWord, localDictSource, type LookupResult } from "../dict";
+import { isModKey } from "../platform";
 import WordPopup, { type PopupAnchor } from "./WordPopup";
 
 interface Props {
@@ -175,12 +176,12 @@ export default function Reader({ book, onBack }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [next, prev, gotoPage, numPages, goBack]);
 
-  // 滚轮：Ctrl+滚轮缩放；普通滚轮先滚动页面内容，到边缘再翻页
+  // 滚轮：修饰键+滚轮缩放；普通滚轮先滚动页面内容，到边缘再翻页
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     function onWheel(e: WheelEvent) {
-      if (e.ctrlKey) {
+      if (isModKey(e)) {
         e.preventDefault();
         const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
         setCustomScale(clamp(lastScaleRef.current * factor, 0.2, 6));

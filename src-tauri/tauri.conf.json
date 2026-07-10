@@ -24,14 +24,14 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$DATA/Shelf/**"]
+        "scope": ["$APPDATA/**"]
       }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "targets": ["nsis", "app", "dmg"],
+    "icon": ["icons/icon.ico", "icons/icon.png", "icons/icon.icns"],
     "resources": ["resources/dict.db"],
     "windows": {
       "nsis": {
