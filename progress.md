@@ -120,6 +120,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-11**：阶段 1 提交 CI 实跑三 job 全绿（[run 29163138657](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29163138657)）。
 - **2026-07-11**：阶段 1 开发完成。P1-1：macOS tauri dev 一次跑通（进程/窗口/数据目录/WAL/零错误日志），无需任何代码改动——阶段 0 的跨平台整备直接兑现。P1-3/P1-4 缩容关闭（Tauri 2 默认菜单栏与原生窗口装饰已覆盖需求）。P1-5 Codex 交付捏合缩放，tsc 打回一次主控修正。P1-6 审计关闭。P1-2 产出 Shelf.app + dmg（arm64，ad-hoc 签名）。待用户：M1 人工走查（导入/阅读/捏合缩放/菜单/dmg 安装）；H-1/H-2 注册后解锁 P1-7/P1-8。
 
 - **2026-07-10（下午）**：P0-1 返工 CI 实跑通过：Frontend / Rust-Windows / Rust-macOS 三 job 全绿（[run 29142726574](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29142726574)），macOS 侧 migrate_old_base 的 dead_code 处理如预期。阶段 0 仅剩容器外人工 UI 回归。
