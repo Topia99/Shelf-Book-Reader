@@ -4,8 +4,8 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-08
-**当前阶段**：阶段 0 ✅ 完成（CI 三 job 全绿；剩 Windows 真机手动回归由用户执行）→ 下一步：阶段 1（macOS 版）与阶段 2（云服务）可并行开工
+**最后更新**：2026-07-10
+**当前阶段**：阶段 0 收尾——P0-1 打回后已返工完成（DB 改存相对路径 + 迁移判据加固，14 单测全绿，真机验证 DB 改写生效）；剩容器外人工 UI 回归（导入/阅读/进度/取词）由用户执行 → 阶段 1/2 可并行开工
 **里程碑**：M1 Mac 版可用 ⏳｜M2 双端接着读 ⏳｜M3 TestFlight 可分享 ⏳｜M4 商店上线 ⏳
 
 ---
@@ -23,7 +23,7 @@
 
 | ID | 任务 | 状态 | 执行者 | 验收记录 |
 |---|---|---|---|---|
-| P0-1 | 数据目录跨平台化（APPDATA → app_data_dir + Windows 迁移） | ✅ | Codex 窗口1 | cargo check/clippy 零警告，6 单测过；Windows 分支人工审查 + CI 兜底 |
+| P0-1 | 数据目录跨平台化（APPDATA → app_data_dir + Windows 迁移） | ✅ | Codex 窗口1 → 打回 → Claude 返工 | 2026-07-10 真机回归打回（DB 存绝对路径迁移后悬空 + 迁移判据 `!new_base.exists()` 过脆）；同日返工：DB 改存相对路径（`books/<hash>.pdf`，返回前端/删文件时拼回绝对，iOS 容器路径变化同样受益）、init_db 幂等改写存量绝对路径、迁移判据改"哪边有 library.db"+ 空骨架清除 + 全异常路径回退旧目录；14 单测全绿，真机实测 DB 改写生效。UI 回归须在 Claude 容器外做（AppData 虚拟化） |
 | P0-2 | 跨平台假设审计 | ✅ | Codex 窗口2 | 20 条清单（4 阻塞/13 重要/3 次要）→ [docs/跨平台审计清单.md](docs/跨平台审计清单.md) |
 | P0-3 | 快捷键抽象层（src/platform.ts） | ✅ | Codex 窗口3 | tsc 通过；Reader 滚轮缩放已接入 |
 | P0-4 | tauri.conf.json 修复（+app/dmg 目标、+icns、scope 对齐） | ✅ | Codex 窗口4 | JSON 校验通过 |
@@ -119,6 +119,9 @@
 ---
 
 ## 执行日志（倒序）
+
+- **2026-07-10（下午）**：P0-1 返工完成。方案：① books 表 file_path/cover_path 改存相对路径（'/' 分隔），后端 to_abs/absolutize_book 在返回前端和碰文件系统前拼回绝对路径，前端零改动；② init_db 里 normalize_book_paths 把存量绝对路径按文件名幂等改写为相对（入库布局固定为 books/<hash>.pdf，安全）；③ 迁移逻辑抽成纯函数 migrate_old_base：判据改"哪边有 library.db"，新目录空骨架先清再整体原子 rename，新目录有真实文件但无库/rename 失败等异常一律回退用旧目录。clippy -D warnings 零警告；单测 6→14（迁移五分支 + 改写幂等/NULL 封面 + to_abs）；本机 tauri dev 实跑确认存量库启动后被改写为相对路径。待办：容器外人工 UI 回归。
+- **2026-07-10**：Windows 真机回归（P0 阶段验收）。静态检查全绿：tsc ✅、cargo clippy -D warnings ✅（CI 首轮修复在本地 Windows 复验通过）、cargo test 6/6 ✅。**发现 P0-1 阻塞缺陷**：本机真实 library.db 中 file_path/cover_path 均为 `%APPDATA%\Shelf\...` 绝对路径，迁移重命名目录后无任何代码改写这些行 → 升级老用户封面全断、书打不开。P0-1 状态改 ⛔ 打回。次要发现：① 迁移条件 `!new_base.exists()` 遇到预先存在的新目录会静默跳过迁移（本机即复现：残留的 7/4 早期 com.shelf.reader 目录导致 dev 启动读到旧快照书库）；② asset 协议 scope 因 setup 里运行时 allow_directory 双目录，不受迁移落点影响，无风险。测试环境备注：本次会话运行于 Claude 桌面 MSIX 容器内，AppData 被虚拟化，`tauri dev` 的手动 UI 回归（导入/阅读/取词）无法在本会话内代表真实用户环境，修复后需在普通终端/双击安装版下人工过一遍。用户真实数据（%APPDATA%\Shelf，4 本书）未受影响，已另备份。
 
 - **2026-07-08**：CI 首轮实跑：Frontend ✅、Rust-macOS ✅、Rust-Windows ❌（P0-1 的 cfg(windows) 迁移函数触发 clippy collapsible_if，本地 Mac 编译不到该分支所以未暴露——印证了"必须 GitHub 实跑"的要求）。已用最小复现 crate 定位并修复，二轮 CI 验证中。
 - **2026-07-08**：阶段 0 全部完成。5 个 Codex 窗口两波并行交付（波1：P0-1/P0-2/P0-3；波2：P0-4/P0-5），全部一次验收通过。发现并修复关键坑：Windows 老用户数据目录迁移（%APPDATA%\Shelf → com.shelf.reader）。CI 推送后待 GitHub 实跑验证 Windows 编译。
