@@ -18,6 +18,11 @@ interface OutlineNode {
   children: OutlineNode[];
 }
 
+// WebKit 专有 gesture 事件（TS 无内置类型），继承 Event 以便从监听器参数直接窄化
+interface WebKitGestureEvent extends Event {
+  scale: number;
+}
+
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 export default function Reader({ book, onBack }: Props) {
@@ -46,6 +51,7 @@ export default function Reader({ book, onBack }: Props) {
   const text2Ref = useRef<HTMLDivElement>(null);
   const wrap2Ref = useRef<HTMLDivElement>(null);
   const lastScaleRef = useRef(1);
+  const gestureStartScaleRef = useRef(1);
   const pageRef = useRef(1);
   const lastFlipAtRef = useRef(0);
   const popupRef = useRef(popup);
@@ -177,6 +183,7 @@ export default function Reader({ book, onBack }: Props) {
   }, [next, prev, gotoPage, numPages, goBack]);
 
   // 滚轮：修饰键+滚轮缩放；普通滚轮先滚动页面内容，到边缘再翻页
+  // macOS WKWebView 的触控板捏合会触发 WebKit 专有 gesture 事件，这里接管以复用现有缩放状态。
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -200,8 +207,30 @@ export default function Reader({ book, onBack }: Props) {
         else prev();
       }
     }
+    function onGestureStart(e: Event) {
+      const gestureEvent = e as WebKitGestureEvent;
+      gestureStartScaleRef.current = lastScaleRef.current;
+      gestureEvent.preventDefault();
+    }
+    function onGestureChange(e: Event) {
+      const gestureEvent = e as WebKitGestureEvent;
+      setCustomScale(clamp(gestureStartScaleRef.current * gestureEvent.scale, 0.2, 6));
+      setZoom("custom");
+      gestureEvent.preventDefault();
+    }
+    function onGestureEnd(e: Event) {
+      (e as WebKitGestureEvent).preventDefault();
+    }
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    el.addEventListener("gesturestart", onGestureStart as EventListener, { passive: false });
+    el.addEventListener("gesturechange", onGestureChange as EventListener, { passive: false });
+    el.addEventListener("gestureend", onGestureEnd as EventListener, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("gesturestart", onGestureStart as EventListener);
+      el.removeEventListener("gesturechange", onGestureChange as EventListener);
+      el.removeEventListener("gestureend", onGestureEnd as EventListener);
+    };
   }, [next, prev]);
 
   // 翻页 / 缩放 / 视图切换时自动关闭取词弹窗
