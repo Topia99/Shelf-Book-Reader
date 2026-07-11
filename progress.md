@@ -120,6 +120,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-10（下午）**：P0-1 返工 CI 实跑通过：Frontend / Rust-Windows / Rust-macOS 三 job 全绿（[run 29142726574](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29142726574)），macOS 侧 migrate_old_base 的 dead_code 处理如预期。阶段 0 仅剩容器外人工 UI 回归。
 - **2026-07-10（下午）**：P0-1 返工完成。方案：① books 表 file_path/cover_path 改存相对路径（'/' 分隔），后端 to_abs/absolutize_book 在返回前端和碰文件系统前拼回绝对路径，前端零改动；② init_db 里 normalize_book_paths 把存量绝对路径按文件名幂等改写为相对（入库布局固定为 books/<hash>.pdf，安全）；③ 迁移逻辑抽成纯函数 migrate_old_base：判据改"哪边有 library.db"，新目录空骨架先清再整体原子 rename，新目录有真实文件但无库/rename 失败等异常一律回退用旧目录。clippy -D warnings 零警告；单测 6→14（迁移五分支 + 改写幂等/NULL 封面 + to_abs）；本机 tauri dev 实跑确认存量库启动后被改写为相对路径。待办：容器外人工 UI 回归。
 - **2026-07-10**：Windows 真机回归（P0 阶段验收）。静态检查全绿：tsc ✅、cargo clippy -D warnings ✅（CI 首轮修复在本地 Windows 复验通过）、cargo test 6/6 ✅。**发现 P0-1 阻塞缺陷**：本机真实 library.db 中 file_path/cover_path 均为 `%APPDATA%\Shelf\...` 绝对路径，迁移重命名目录后无任何代码改写这些行 → 升级老用户封面全断、书打不开。P0-1 状态改 ⛔ 打回。次要发现：① 迁移条件 `!new_base.exists()` 遇到预先存在的新目录会静默跳过迁移（本机即复现：残留的 7/4 早期 com.shelf.reader 目录导致 dev 启动读到旧快照书库）；② asset 协议 scope 因 setup 里运行时 allow_directory 双目录，不受迁移落点影响，无风险。测试环境备注：本次会话运行于 Claude 桌面 MSIX 容器内，AppData 被虚拟化，`tauri dev` 的手动 UI 回归（导入/阅读/取词）无法在本会话内代表真实用户环境，修复后需在普通终端/双击安装版下人工过一遍。用户真实数据（%APPDATA%\Shelf，4 本书）未受影响，已另备份。
 
