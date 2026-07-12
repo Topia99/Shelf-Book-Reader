@@ -1,4 +1,7 @@
 mod sync;
+#[allow(dead_code)] // P3-6 接线后移除
+mod sync_engine;
+mod sync_supabase;
 
 use rusqlite::Connection;
 use serde::Serialize;
