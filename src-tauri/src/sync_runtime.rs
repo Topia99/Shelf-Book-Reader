@@ -156,14 +156,18 @@ fn engine_loop(
     let mut backend = SupabaseBackend::new(url, key);
 
     // 启动时从钥匙串恢复会话；refresh 校验有效性，失效则静默清除（用户重新登录即可）
-    if let Ok(Some(saved)) = token_store::load_session() {
+    let loaded = token_store::load_session();
+    eprintln!("[sync] 会话加载结果: {:?}", loaded.as_ref().map(|o| o.is_some()));
+    if let Ok(Some(saved)) = loaded {
         backend.set_session(saved);
         match backend.refresh() {
             Ok(fresh) => {
+                eprintln!("[sync] 会话恢复并刷新成功");
                 let _ = token_store::save_session(&fresh);
                 update_status(&app, &status, |s| s.signed_in = true);
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!("[sync] 会话刷新失败: {e}");
                 let _ = token_store::clear_session();
                 backend = {
                     let (url, key) = supabase_config();
@@ -283,6 +287,7 @@ fn engine_loop(
                 update_status(&app, &status, |s| s.syncing = true);
                 match run_cycle(&db, &mut backend) {
                     Ok(()) => {
+                        eprintln!("[sync] 同步周期完成");
                         failures = 0;
                         pending = None;
                         last_run = Some(Instant::now());
@@ -293,6 +298,7 @@ fn engine_loop(
                         });
                     }
                     Err(e) => {
+                        eprintln!("[sync] 同步周期失败: {e}");
                         failures = failures.saturating_add(1);
                         let delay = (BACKOFF_BASE_SECS << failures.min(7)).min(BACKOFF_CAP_SECS);
                         pending = Some(Instant::now() + Duration::from_secs(delay));

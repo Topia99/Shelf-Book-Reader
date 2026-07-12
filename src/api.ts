@@ -19,6 +19,14 @@ export interface AddResult {
   book: Book | null;
 }
 
+export interface SyncStatus {
+  signed_in: boolean;
+  email: string | null;
+  syncing: boolean;
+  last_sync_ms: number | null;
+  last_error: string | null;
+}
+
 export type SortKey = "recent" | "added" | "title";
 
 export const listBooks = (sort: SortKey, query: string) =>
@@ -40,3 +48,17 @@ export const setTotalPages = (id: number, total: number) =>
 
 export const saveCover = (hash: string, data: number[]) =>
   invoke<string>("save_cover", { hash, data });
+
+export const syncSignIn = (email: string, password: string) =>
+  invoke<void>("sync_sign_in", { email, password });
+
+export const syncSignUp = (email: string, password: string) =>
+  invoke<void>("sync_sign_up", { email, password });
+
+export const syncSignOut = () => invoke<void>("sync_sign_out");
+
+export const syncDeleteAccount = () => invoke<void>("sync_delete_account");
+
+export const syncStatus = () => invoke<SyncStatus>("sync_status");
+
+export const syncNow = () => invoke<void>("sync_now");

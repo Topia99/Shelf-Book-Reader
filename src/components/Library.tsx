@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   addBooks,
@@ -8,10 +9,13 @@ import {
   renameBook,
   saveCover,
   setTotalPages,
+  syncStatus,
   type Book,
   type SortKey,
+  type SyncStatus,
 } from "../api";
 import { isPasswordError, openPdf, renderCoverPng } from "../pdf";
+import AccountPanel from "./AccountPanel";
 import BookCover from "./BookCover";
 
 interface Props {
@@ -45,6 +49,14 @@ export default function Library({ onOpenBook }: Props) {
   const [renaming, setRenaming] = useState<Book | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<Book | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [syncState, setSyncState] = useState<SyncStatus>({
+    signed_in: false,
+    email: null,
+    syncing: false,
+    last_sync_ms: null,
+    last_error: null,
+  });
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async () => {
@@ -54,6 +66,10 @@ export default function Library({ onOpenBook }: Props) {
   useEffect(() => {
     reload().catch((e) => pushNotice("error", String(e)));
   }, [reload]);
+
+  const refreshSyncStatus = useCallback(async () => {
+    setSyncState(await syncStatus());
+  }, []);
 
   function pushNotice(kind: Notice["kind"], text: string) {
     setNotices((ns) => [...ns, { kind, text }]);
@@ -157,6 +173,25 @@ export default function Library({ onOpenBook }: Props) {
     if (renaming) renameInputRef.current?.select();
   }, [renaming]);
 
+  // 账号状态初始化 + 持续订阅 Rust 侧同步事件
+  useEffect(() => {
+    refreshSyncStatus().catch((e) => pushNotice("error", String(e)));
+
+    let cancelled = false;
+    const unlistenPromise = listen<SyncStatus>("sync-status", (event) => {
+      if (!cancelled) {
+        setSyncState(event.payload);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [refreshSyncStatus]);
+
+  const accountInitial = syncState.email?.trim().charAt(0).toUpperCase() || "账";
+
   async function handleAddClick() {
     const selected = await openFileDialog({
       multiple: true,
@@ -200,6 +235,19 @@ export default function Library({ onOpenBook }: Props) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        <button className="account-trigger" onClick={() => setAccountOpen(true)}>
+          {syncState.signed_in ? (
+            <>
+              <span className="account-trigger-badge" aria-hidden="true">
+                {accountInitial}
+              </span>
+              <span className="account-trigger-email">{syncState.email}</span>
+              {syncState.syncing && <span className="account-trigger-sync" aria-label="同步中" />}
+            </>
+          ) : (
+            "登录"
+          )}
+        </button>
         <select
           className="sort-select"
           value={sort}
@@ -300,6 +348,13 @@ export default function Library({ onOpenBook }: Props) {
           </div>
         </div>
       )}
+
+      <AccountPanel
+        open={accountOpen}
+        status={syncState}
+        onClose={() => setAccountOpen(false)}
+        onRefreshStatus={refreshSyncStatus}
+      />
 
       <div className="notices">
         {notices.map((n, i) => (
