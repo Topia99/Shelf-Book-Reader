@@ -120,6 +120,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-13**：同步核心提交 CI 三 job 全绿（[run 29205849927](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29205849927)）。
 - **2026-07-13**：同步核心三连交付收口。P2-6 sign-url 本地栈端到端全绿（401/403/413/200 + 真实 R2 往返 + 配额精确入账）并已部署云端。P3-2 打回一次：单测抓到手写闰日转换差一天、clippy 抓到 `if a { None } else { None }` 逻辑笔误，返工修复。P3-4 主控审查抓到关键缺陷：本地 LWW 胜出时把 synced_at 一并推进，导致本地新进度被标记已同步、云端永远收不到——修正为"只有采纳远端值才推进 synced_at，本地胜出保持脏状态等下轮 push"。全库 39 测试绿、clippy 零警告。
 
 - **2026-07-12（晚）**：云端线提交 CI 三 job 全绿（[run 29204895532](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29204895532)）；随即三窗并发派出 P2-6/P3-2/P3-4+5。
