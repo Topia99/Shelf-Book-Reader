@@ -1,3 +1,5 @@
+mod sync;
+
 use rusqlite::Connection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};

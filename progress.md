@@ -5,7 +5,7 @@
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
 **最后更新**：2026-07-12
-**当前阶段**：阶段 2 前置就绪中——P2-8/P4-3 已完成（CI 全绿）；等待用户：`supabase login`（解锁 P2-1/P2-2 云端全线）、启动 Docker Desktop（解锁 P2-9）、Xcode 登录 Apple ID、注册 Cloudflare R2
+**当前阶段**：阶段 2 主体推进中——云端 schema 已上线（P2-1/2/3/5/8 ✅）、SyncBackend trait 就位（P3-1 ✅）；下一步：P2-6 预签名 Edge Function、P3-2 Supabase 后端实现、P2-4 Auth 配置
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 ⏳｜M3 TestFlight 可分享 ⏳｜M4 商店上线 ⏳
 
 ---
@@ -14,9 +14,9 @@
 
 | ID | 任务 | 状态 | 备注 |
 |---|---|---|---|
-| H-1 | Apple Developer 注册（$99/年） | ✅ | 2026-07-12 用户确认；本机已有 Xcode 16.2；待用户在 Xcode 登录 Apple ID |
+| H-1 | Apple Developer 注册（$99/年） | ✅ | 2026-07-12 用户确认；Xcode 16.2 已登录 Apple ID |
 | H-2 | Azure Trusted Signing 开通 | ⏳ | 阻塞 P1-7 的 Windows 签名 |
-| H-3 | Cloudflare + Supabase 账号 | 🔄 | Supabase ✅（CLI 2.109.1 已装，待 `supabase login`）；Cloudflare R2 ⏳（阻塞 P2-5/P2-6/阶段 5） |
+| H-3 | Cloudflare + Supabase 账号 | ✅ | Supabase 已 login + link；R2 凭证经 .env.r2.local 提供（不入库），写读删全链路验证通过 |
 | H-4 | 域名注册 | ⏳ | 阻塞 P6-1 |
 
 ## 阶段 0：项目整备 ✅（2026-07-08 完成）
@@ -48,11 +48,11 @@
 
 | ID | 任务 | 状态 | 依赖 |
 |---|---|---|---|
-| P2-1 | Supabase 项目 dev/prod | 🚫 | H-3 |
-| P2-2 | 云端 schema + RLS migration | 🚫 | P2-1 |
-| P2-3 | RLS 隔离测试 | 🚫 | P2-2 |
+| P2-1 | Supabase 项目 dev/prod | ✅ | 用户已有项目（us-east-1）用作 dev 并已 link；prod 名额留待上线前 |
+| P2-2 | 云端 schema + RLS migration | ✅ | 本地栈实跑打回一次（缺表级 GRANT，RLS≠授权），补齐后 db push 成功，远端 migration 一致 |
+| P2-3 | RLS 隔离测试 | ✅ | 7 断言全绿（隔离/越权写/越权改/配额硬拒/触发器）；supabase/tests/ 入库可重复执行 |
 | P2-4 | Auth 三渠道配置 | 🚫 | P2-1, H-1 |
-| P2-5 | R2 bucket + token | 🚫 | H-3 |
+| P2-5 | R2 bucket + token | ✅ | bucket shelf-book-storage；签名请求 PUT/GET/DELETE 往返验证通过 |
 | P2-6 | Edge Function：预签名 + 配额 | 🚫 | P2-2, P2-5 |
 | P2-7 | Edge Function：删除账号级联 | 🚫 | P2-6 |
 | P2-8 | 本地 SQLite v2 迁移（同步字段） | ✅ | user_version=2 迁移/updated_at 写入钩子/墓碑删除/同 hash 复活；clippy 零警告，单测 14→18 全绿 |
@@ -62,7 +62,7 @@
 
 | ID | 任务 | 状态 | 依赖 |
 |---|---|---|---|
-| P3-1 | SyncBackend trait + 数据模型 | 🚫 | P2-2 |
+| P3-1 | SyncBackend trait + 数据模型 | ✅ | src-tauri/src/sync.rs：5 模型 + SyncError + 10 方法 trait；clippy 零警告 |
 | P3-2 | Supabase 后端实现 | 🚫 | P3-1 |
 | P3-3 | Token 安全存储 | 🚫 | P3-2 |
 | P3-4 | SyncEngine 核心（LWW/墓碑/游标） | 🚫 | P2-8 |
@@ -119,6 +119,8 @@
 ---
 
 ## 执行日志（倒序）
+
+- **2026-07-12（晚）**：云端线贯通。四项外部依赖全解锁（Supabase login/Docker/Xcode Apple ID/R2 凭证）。R2 签名请求写读删往返验证通过（P2-5 ✅）。P2-2 schema 在本地栈实跑抓到真缺陷：只写了 RLS 策略没写表级 GRANT，authenticated 角色无表权限——补授权后 RLS 测试 7 断言全绿（P2-3 ✅），db push 上云成功，远端 migration 一致。P3-1 SyncBackend trait + 云端模型交付验收通过。教训入库：RLS 是行过滤器，表级授权是另一层，两者缺一不可；本地栈实跑是 schema 的"CI 实跑"。
 
 - **2026-07-12**：P2-8/P4-3 提交 CI 三 job 全绿（[run 29203652757](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29203652757)）。
 - **2026-07-12**：H-1 ✅（Apple Developer）、Supabase 账号 ✅（CLI 已装待 login）。并行交付：P2-8（本地库 v2 迁移，单测 14→18）、P4-3（渲染预算）均一次验收通过；P4-2 按设计满足关闭（翻页式阅读器无滚动列表）。环境盘点：Xcode 16.2 ✅、Docker 装了但守护进程未启动、Cloudflare R2 未注册（下一个外部瓶颈）。
