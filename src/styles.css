@@ -164,6 +164,7 @@ button {
 }
 
 .book-card {
+  position: relative; /* 云端角标的定位基准 */
   cursor: pointer;
   border-radius: 8px;
   padding: 8px;
@@ -732,4 +733,17 @@ button {
 .error-text {
   color: var(--danger);
   font-size: 13px;
+}
+
+/* 云端书籍角标：文件本体尚未下载到本机 */
+.cloud-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 10px;
+  background: rgba(30, 100, 200, 0.85);
+  color: #fff;
+  pointer-events: none;
 }

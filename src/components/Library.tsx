@@ -40,6 +40,17 @@ const SORT_LABELS: Record<SortKey, string> = {
 };
 
 export default function Library({ onOpenBook }: Props) {
+  /** 云端书籍本机还没有文件本体（文件同步在后续版本），拦截打开并提示 */
+  function tryOpenBook(book: Book) {
+    if (book.cloud_state === "remote") {
+      pushNotice(
+        "info",
+        `《${book.title}》的文件在云端，尚未下载到本机（书目与进度已同步，文件同步功能即将上线）`
+      );
+      return;
+    }
+    onOpenBook(book);
+  }
   const [books, setBooks] = useState<Book[]>([]);
   const [sort, setSort] = useState<SortKey>("recent");
   const [query, setQuery] = useState("");
@@ -275,7 +286,7 @@ export default function Library({ onOpenBook }: Props) {
             <div
               key={book.id}
               className="book-card"
-              onDoubleClick={() => onOpenBook(book)}
+              onDoubleClick={() => tryOpenBook(book)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setCtxMenu({ x: e.clientX, y: e.clientY, book });
@@ -283,6 +294,7 @@ export default function Library({ onOpenBook }: Props) {
               title={`${book.title}（双击打开）`}
             >
               <BookCover book={book} />
+              {book.cloud_state === "remote" && <span className="cloud-badge">云端</span>}
               <div className="book-title">{book.title}</div>
               <div className="book-progress">{progressText(book)}</div>
             </div>
@@ -294,7 +306,7 @@ export default function Library({ onOpenBook }: Props) {
 
       {ctxMenu && (
         <div className="context-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
-          <button onClick={() => onOpenBook(ctxMenu.book)}>打开</button>
+          <button onClick={() => tryOpenBook(ctxMenu.book)}>打开</button>
           <button onClick={() => setRenaming(ctxMenu.book)}>重命名</button>
           <button className="danger" onClick={() => setConfirmRemove(ctxMenu.book)}>
             从书库移除

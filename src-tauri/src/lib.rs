@@ -34,6 +34,8 @@ struct Book {
     current_page: i64,
     added_at: String,
     last_opened_at: Option<String>,
+    /// local | uploading | synced | remote（remote = 云端有、本机无文件，前端据此拦截打开）
+    cloud_state: String,
 }
 
 #[derive(Serialize)]
@@ -46,7 +48,7 @@ struct AddResult {
 }
 
 const BOOK_COLS: &str =
-    "id, hash, title, file_path, cover_path, total_pages, current_page, added_at, last_opened_at";
+    "id, hash, title, file_path, cover_path, total_pages, current_page, added_at, last_opened_at, cloud_state";
 
 fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
     Ok(Book {
@@ -59,6 +61,7 @@ fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
         current_page: row.get(6)?,
         added_at: row.get(7)?,
         last_opened_at: row.get(8)?,
+        cloud_state: row.get(9)?,
     })
 }
 

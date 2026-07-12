@@ -10,6 +10,8 @@ export interface Book {
   current_page: number;
   added_at: string;
   last_opened_at: string | null;
+  /** local=仅本机 uploading=上传中 synced=已同步 remote=云端有本机无文件 */
+  cloud_state: "local" | "uploading" | "synced" | "remote";
 }
 
 export interface AddResult {
