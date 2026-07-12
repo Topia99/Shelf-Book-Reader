@@ -27,8 +27,6 @@ pub struct SupabaseBackend {
 
 impl SupabaseBackend {
     /// 创建新的 Supabase 后端实例。
-    // P3-6/P3-7 接线后移除。
-    #[allow(dead_code)]
     pub fn new(base_url: String, anon_key: String) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -41,6 +39,16 @@ impl SupabaseBackend {
             client,
             session: None,
         }
+    }
+
+    /// 恢复历史会话（钥匙串加载后注入）；有效性由随后的 refresh 校验。
+    pub fn set_session(&mut self, session: AuthSession) {
+        self.session = Some(session);
+    }
+
+    /// 当前会话的只读视图（引擎用于判断登录态与过期时间）。
+    pub fn session(&self) -> Option<&AuthSession> {
+        self.session.as_ref()
     }
 
     fn auth_url(&self, path: &str) -> String {

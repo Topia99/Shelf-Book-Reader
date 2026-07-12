@@ -1,7 +1,8 @@
 mod sync;
-#[allow(dead_code)] // P3-6 接线后移除
 mod sync_engine;
+mod sync_runtime;
 mod sync_supabase;
+mod token_store;
 
 use rusqlite::Connection;
 use serde::Serialize;
@@ -324,9 +325,67 @@ fn remove_book(id: i64, state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn update_progress(id: i64, page: i64, state: State<AppState>) -> Result<(), String> {
-    let db = state.db.lock().unwrap();
-    update_progress_in_db(&db, id, page)
+fn update_progress(
+    id: i64,
+    page: i64,
+    state: State<AppState>,
+    sync: State<sync_runtime::SyncHandle>,
+) -> Result<(), String> {
+    {
+        let db = state.db.lock().unwrap();
+        update_progress_in_db(&db, id, page)?;
+    }
+    // 翻页后请求同步（引擎侧防抖合并，失败不影响本地进度保存）
+    let _ = sync.send(sync_runtime::SyncCommand::SyncNow);
+    Ok(())
+}
+
+// ---------- 账号与同步命令（P3-6） ----------
+
+#[tauri::command]
+fn sync_sign_in(
+    email: String,
+    password: String,
+    sync: State<sync_runtime::SyncHandle>,
+) -> Result<(), String> {
+    sync.request(|reply| sync_runtime::SyncCommand::SignIn {
+        email,
+        password,
+        reply,
+    })
+}
+
+#[tauri::command]
+fn sync_sign_up(
+    email: String,
+    password: String,
+    sync: State<sync_runtime::SyncHandle>,
+) -> Result<(), String> {
+    sync.request(|reply| sync_runtime::SyncCommand::SignUp {
+        email,
+        password,
+        reply,
+    })
+}
+
+#[tauri::command]
+fn sync_sign_out(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
+    sync.request(|reply| sync_runtime::SyncCommand::SignOut { reply })
+}
+
+#[tauri::command]
+fn sync_delete_account(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
+    sync.request(|reply| sync_runtime::SyncCommand::DeleteAccount { reply })
+}
+
+#[tauri::command]
+fn sync_status(sync: State<sync_runtime::SyncHandle>) -> sync_runtime::SyncStatus {
+    sync.status()
+}
+
+#[tauri::command]
+fn sync_now(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
+    sync.send(sync_runtime::SyncCommand::SyncNow)
 }
 
 #[tauri::command]
@@ -995,6 +1054,9 @@ pub fn run() {
             scope.allow_directory(&covers_dir, true)?;
             let db = init_db(&base)?;
             let dict = open_dict(app, &base);
+            // 同步引擎持有自己的数据库连接（WAL 多连接），与 UI 的连接互不阻塞
+            let sync_handle = sync_runtime::spawn(app.handle().clone(), base.join("library.db"));
+            app.manage(sync_handle);
             app.manage(AppState {
                 db: Mutex::new(db),
                 dict: Mutex::new(dict),
@@ -1012,7 +1074,13 @@ pub fn run() {
             rename_book,
             set_total_pages,
             save_cover,
-            lookup_word
+            lookup_word,
+            sync_sign_in,
+            sync_sign_up,
+            sync_sign_out,
+            sync_delete_account,
+            sync_status,
+            sync_now
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

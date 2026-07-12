@@ -5,7 +5,7 @@
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
 **最后更新**：2026-07-12
-**当前阶段**：阶段 2 仅剩 P2-4（Auth 配置）/P2-7/P2-9；阶段 3 核心已就绪（P3-1/2/4/5 ✅），下一步 P3-3（token 存储）、P3-6（引擎接线）、P3-7（账号 UI）→ M2
+**当前阶段**：阶段 3 仅剩 P3-7（UI，分派中）与 P3-8（M2 双端联调）；阶段 2 剩 P2-4（Auth 三渠道，邮箱已可用）与 P2-9
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 ⏳｜M3 TestFlight 可分享 ⏳｜M4 商店上线 ⏳
 
 ---
@@ -54,7 +54,7 @@
 | P2-4 | Auth 三渠道配置 | 🚫 | P2-1, H-1 |
 | P2-5 | R2 bucket + token | ✅ | bucket shelf-book-storage；签名请求 PUT/GET/DELETE 往返验证通过 |
 | P2-6 | Edge Function：预签名 + 配额 | ✅ | 本地栈端到端全绿（401/403/413/200 四用例 + 真实 R2 上传下载往返 + 配额精确入账）；已部署云端并配 secrets |
-| P2-7 | Edge Function：删除账号级联 | 🚫 | P2-6 |
+| P2-7 | Edge Function：删除账号级联 | ✅ | 打回一次（DOMParser 不存在于 Edge Runtime，改正则解析）；重试语义实测成立；R2 前缀/DB 行/auth 用户三级清理端到端验证；已部署云端 |
 | P2-8 | 本地 SQLite v2 迁移（同步字段） | ✅ | user_version=2 迁移/updated_at 写入钩子/墓碑删除/同 hash 复活；clippy 零警告，单测 14→18 全绿 |
 | P2-9 | 集成测试骨架 | 🚫 | P2-3, P2-6 |
 
@@ -64,11 +64,11 @@
 |---|---|---|---|
 | P3-1 | SyncBackend trait + 数据模型 | ✅ | src-tauri/src/sync.rs：5 模型 + SyncError + 10 方法 trait；clippy 零警告 |
 | P3-2 | Supabase 后端实现 | ✅ | GoTrue+PostgREST+sign-url 客户端；打回一次（闰日转换差一天 + 3 处 clippy 含逻辑笔误），返工后全绿 |
-| P3-3 | Token 安全存储 | 🚫 | P3-2 |
+| P3-3 | Token 安全存储 | ✅ | keyring 系统钥匙串（macOS Keychain/Win 凭据管理器/iOS 同栈），40 测试绿；真实钥匙串读写留 M2 联调 |
 | P3-4 | SyncEngine 核心（LWW/墓碑/游标） | ✅ | Codex 交付后主控修正关键缺陷：本地 LWW 胜出时误推进 synced_at 导致本地值永不上推——改为「只有采纳远端值才变干净」 |
 | P3-5 | SyncEngine 单测（最高优先级测试） | ✅ | 15 测试全分支覆盖（LWW 双向/墓碑/窗口/游标/幂等重放）；全库 39 测试绿、clippy 零警告 |
-| P3-6 | SyncEngine 接线（触发器/退避） | 🚫 | P3-2, P3-4 |
-| P3-7 | 登录/注册/账号 UI + 删除账号 | 🚫 | P3-2 |
+| P3-6 | SyncEngine 接线（触发器/退避） | ✅ | sync_runtime.rs：专用线程/命令通道/5s 防抖+30s 最小间隔/5min 心跳/指数退避/钥匙串会话恢复/6 个 Tauri 命令 + sync-status 事件；40 测试绿 |
+| P3-7 | 登录/注册/账号 UI + 删除账号 | 🔄 | Codex 分派中（AccountPanel + 工具栏账号态 + sync-status 事件订阅） |
 | P3-8 | Win↔Mac 双端联调（M2 里程碑） | 🚫 | P3-6, P3-7, 阶段1 |
 
 ## 阶段 4：iOS / iPadOS
@@ -119,6 +119,8 @@
 ---
 
 ## 执行日志（倒序）
+
+- **2026-07-13（下午）**：P2-7 打回一次（DOMParser 不存在于 Edge Runtime）修复后端到端全绿并部署上云——失败重试语义顺带实测成立。P3-3 钥匙串存储验收通过。P3-6 主控完成：同步引擎专用线程接线（防抖/心跳/退避/会话恢复），update_progress 挂接翻页触发，6 个账号同步命令注册；40 测试 + clippy + tsc 全绿。P3-7 账号 UI 分派中。
 
 - **2026-07-13**：同步核心提交 CI 三 job 全绿（[run 29205849927](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29205849927)）。
 - **2026-07-13**：同步核心三连交付收口。P2-6 sign-url 本地栈端到端全绿（401/403/413/200 + 真实 R2 往返 + 配额精确入账）并已部署云端。P3-2 打回一次：单测抓到手写闰日转换差一天、clippy 抓到 `if a { None } else { None }` 逻辑笔误，返工修复。P3-4 主控审查抓到关键缺陷：本地 LWW 胜出时把 synced_at 一并推进，导致本地新进度被标记已同步、云端永远收不到——修正为"只有采纳远端值才推进 synced_at，本地胜出保持脏状态等下轮 push"。全库 39 测试绿、clippy 零警告。
