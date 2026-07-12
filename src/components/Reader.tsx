@@ -346,7 +346,9 @@ export default function Reader({ book, onBack }: Props) {
       lastScaleRef.current = scale;
       setDisplayScale(scale);
 
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      // iOS WKWebView 的可用内存较紧，极端缩放叠加高 DPR 时容易生成超大位图并被系统杀掉。
+      const MAX_CANVAS_PIXELS = 16_777_216;
       const canvases = [canvas1Ref.current, canvas2Ref.current];
       const textDivs = [text1Ref.current, text2Ref.current];
       if (wrap2Ref.current) {
@@ -357,11 +359,19 @@ export default function Reader({ book, onBack }: Props) {
         const canvas = canvases[i];
         const textDiv = textDivs[i];
         if (!canvas || !textDiv || cancelled) return;
-        const vp = proxies[i].getViewport({ scale: scale * dpr });
+        const vpLayout = proxies[i].getViewport({ scale });
+        const requestedRenderScale = scale * dpr;
+        const requestedPixels = vpLayout.width * dpr * (vpLayout.height * dpr);
+        const renderBudgetRatio =
+          requestedPixels > MAX_CANVAS_PIXELS
+            ? Math.sqrt(MAX_CANVAS_PIXELS / requestedPixels)
+            : 1;
+        const renderScale = requestedRenderScale * renderBudgetRatio;
+        const vp = proxies[i].getViewport({ scale: renderScale });
         canvas.width = Math.floor(vp.width);
         canvas.height = Math.floor(vp.height);
-        canvas.style.width = `${Math.floor(vp.width / dpr)}px`;
-        canvas.style.height = `${Math.floor(vp.height / dpr)}px`;
+        canvas.style.width = `${Math.floor(vpLayout.width)}px`;
+        canvas.style.height = `${Math.floor(vpLayout.height)}px`;
         const task = proxies[i].render({
           canvasContext: canvas.getContext("2d")!,
           viewport: vp,
@@ -376,8 +386,8 @@ export default function Reader({ book, onBack }: Props) {
         // 透明文字层：让双击可以选中单词（取词功能的基础）
         const vpText = proxies[i].getViewport({ scale });
         textDiv.replaceChildren();
-        textDiv.style.width = `${Math.floor(vp.width / dpr)}px`;
-        textDiv.style.height = `${Math.floor(vp.height / dpr)}px`;
+        textDiv.style.width = `${Math.floor(vpLayout.width)}px`;
+        textDiv.style.height = `${Math.floor(vpLayout.height)}px`;
         textDiv.style.setProperty("--scale-factor", String(scale));
         const textLayer = new pdfjs.TextLayer({
           textContentSource: proxies[i].streamTextContent(),

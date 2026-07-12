@@ -5,6 +5,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Manager, State};
 
 struct AppState {
@@ -76,13 +77,23 @@ fn sha256_of_file(path: &Path) -> Result<String, String> {
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1024 * 1024];
     loop {
-        let n = file.read(&mut buf).map_err(|e| format!("读取文件失败：{e}"))?;
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("读取文件失败：{e}"))?;
         if n == 0 {
             break;
         }
         hasher.update(&buf[..n]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// 统一使用 Unix 毫秒时间戳，供后续云同步按 updated_at 做脏数据扫描
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn get_book_by_id(db: &Connection, id: i64) -> Result<Book, String> {
@@ -92,6 +103,41 @@ fn get_book_by_id(db: &Connection, id: i64) -> Result<Book, String> {
         row_to_book,
     )
     .map_err(|e| format!("找不到书籍：{e}"))
+}
+
+fn revive_deleted_book_record(db: &Connection, id: i64, file_path: &str) -> rusqlite::Result<()> {
+    db.execute(
+        "UPDATE books
+         SET deleted = 0,
+             file_path = ?2,
+             updated_at = ?3,
+             added_at = datetime('now', 'localtime')
+         WHERE id = ?1",
+        rusqlite::params![id, file_path, now_ms()],
+    )?;
+    Ok(())
+}
+
+fn tombstone_book(db: &Connection, id: i64) -> Result<(), String> {
+    db.execute(
+        "UPDATE books SET deleted = 1, updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![id, now_ms()],
+    )
+    .map_err(|e| format!("删除记录失败：{e}"))?;
+    Ok(())
+}
+
+fn update_progress_in_db(db: &Connection, id: i64, page: i64) -> Result<(), String> {
+    db.execute(
+        "UPDATE books
+         SET current_page = ?2,
+             last_opened_at = datetime('now', 'localtime'),
+             updated_at = ?3
+         WHERE id = ?1",
+        rusqlite::params![id, page, now_ms()],
+    )
+    .map_err(|e| format!("保存进度失败：{e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -129,18 +175,59 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
     };
 
     let db = state.db.lock().unwrap();
+    let existing = db
+        .query_row(
+            "SELECT id, deleted FROM books WHERE hash = ?1",
+            [&hash],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .ok();
 
     // 查重：同哈希即同一本书（即使文件名不同）
-    if let Ok(existing) = db.query_row(
-        &format!("SELECT {BOOK_COLS} FROM books WHERE hash = ?1"),
-        [&hash],
-        row_to_book,
-    ) {
-        return AddResult {
-            path: path_str.to_string(),
-            status: "duplicate".into(),
-            message: Some(format!("已在书库中：{}", existing.title)),
-            book: Some(absolutize_book(&state.base_dir, existing)),
+    if let Some((id, deleted)) = existing {
+        if deleted == 0 {
+            let existing = match db.query_row(
+                &format!("SELECT {BOOK_COLS} FROM books WHERE hash = ?1"),
+                [&hash],
+                row_to_book,
+            ) {
+                Ok(book) => book,
+                Err(e) => return err(format!("读取重复记录失败：{e}")),
+            };
+            return AddResult {
+                path: path_str.to_string(),
+                status: "duplicate".into(),
+                message: Some(format!("已在书库中：{}", existing.title)),
+                book: Some(absolutize_book(&state.base_dir, existing)),
+            };
+        }
+
+        let dest = state.books_dir.join(format!("{hash}.pdf"));
+        if let Err(e) = fs::copy(src, &dest) {
+            let _ = fs::remove_file(&dest); // 清理可能的半截文件（如磁盘满）
+            return err(format!("复制入库失败：{e}"));
+        }
+
+        let revived =
+            revive_deleted_book_record(&db, id, &format!("books/{hash}.pdf")).and_then(|_| {
+                db.query_row(
+                    &format!("SELECT {BOOK_COLS} FROM books WHERE id = ?1"),
+                    [id],
+                    row_to_book,
+                )
+            });
+
+        return match revived {
+            Ok(book) => AddResult {
+                path: path_str.to_string(),
+                status: "added".into(),
+                message: None,
+                book: Some(absolutize_book(&state.base_dir, book)),
+            },
+            Err(e) => {
+                let _ = fs::remove_file(&dest);
+                err(format!("复活已删除书籍失败：{e}"))
+            }
         };
     }
 
@@ -155,11 +242,12 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "未命名".into());
 
+    let updated_at = now_ms();
     let inserted = db
         .execute(
-            "INSERT INTO books (hash, title, file_path, added_at)
-             VALUES (?1, ?2, ?3, datetime('now', 'localtime'))",
-            rusqlite::params![hash, title, format!("books/{hash}.pdf")],
+            "INSERT INTO books (hash, title, file_path, added_at, updated_at)
+             VALUES (?1, ?2, ?3, datetime('now', 'localtime'), ?4)",
+            rusqlite::params![hash, title, format!("books/{hash}.pdf"), updated_at],
         )
         .and_then(|_| {
             db.query_row(
@@ -183,16 +271,21 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
     }
 }
 
-#[tauri::command]
-fn list_books(sort: String, query: String, state: State<AppState>) -> Result<Vec<Book>, String> {
-    let order = match sort.as_str() {
+fn list_books_in_db(
+    db: &Connection,
+    base: &Path,
+    sort: &str,
+    query: &str,
+) -> Result<Vec<Book>, String> {
+    let order = match sort {
         "added" => "added_at DESC, id DESC",
         "title" => "title COLLATE NOCASE ASC",
         // 默认：最近阅读（没读过的排后面，按添加时间）
         _ => "last_opened_at IS NULL, last_opened_at DESC, added_at DESC",
     };
-    let db = state.db.lock().unwrap();
-    let sql = format!("SELECT {BOOK_COLS} FROM books WHERE title LIKE ?1 ORDER BY {order}");
+    let sql = format!(
+        "SELECT {BOOK_COLS} FROM books WHERE deleted = 0 AND title LIKE ?1 ORDER BY {order}"
+    );
     let mut stmt = db.prepare(&sql).map_err(|e| e.to_string())?;
     let pattern = format!("%{}%", query.trim());
     let books = stmt
@@ -202,16 +295,21 @@ fn list_books(sort: String, query: String, state: State<AppState>) -> Result<Vec
         .map_err(|e| e.to_string())?;
     Ok(books
         .into_iter()
-        .map(|b| absolutize_book(&state.base_dir, b))
+        .map(|b| absolutize_book(base, b))
         .collect())
+}
+
+#[tauri::command]
+fn list_books(sort: String, query: String, state: State<AppState>) -> Result<Vec<Book>, String> {
+    let db = state.db.lock().unwrap();
+    list_books_in_db(&db, &state.base_dir, &sort, &query)
 }
 
 #[tauri::command]
 fn remove_book(id: i64, state: State<AppState>) -> Result<(), String> {
     let db = state.db.lock().unwrap();
     let book = get_book_by_id(&db, id)?;
-    db.execute("DELETE FROM books WHERE id = ?1", [id])
-        .map_err(|e| format!("删除记录失败：{e}"))?;
+    tombstone_book(&db, id)?;
     // 删除书库副本与封面缓存；文件删除失败不阻塞（记录已移除）
     let _ = fs::remove_file(to_abs(&state.base_dir, &book.file_path));
     if let Some(cover) = &book.cover_path {
@@ -223,12 +321,7 @@ fn remove_book(id: i64, state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 fn update_progress(id: i64, page: i64, state: State<AppState>) -> Result<(), String> {
     let db = state.db.lock().unwrap();
-    db.execute(
-        "UPDATE books SET current_page = ?2, last_opened_at = datetime('now', 'localtime') WHERE id = ?1",
-        rusqlite::params![id, page],
-    )
-    .map_err(|e| format!("保存进度失败：{e}"))?;
-    Ok(())
+    update_progress_in_db(&db, id, page)
 }
 
 #[tauri::command]
@@ -239,8 +332,8 @@ fn rename_book(id: i64, title: String, state: State<AppState>) -> Result<(), Str
     }
     let db = state.db.lock().unwrap();
     db.execute(
-        "UPDATE books SET title = ?2 WHERE id = ?1",
-        rusqlite::params![id, title],
+        "UPDATE books SET title = ?2, updated_at = ?3 WHERE id = ?1",
+        rusqlite::params![id, title, now_ms()],
     )
     .map_err(|e| format!("重命名失败：{e}"))?;
     Ok(())
@@ -250,8 +343,8 @@ fn rename_book(id: i64, title: String, state: State<AppState>) -> Result<(), Str
 fn set_total_pages(id: i64, total: i64, state: State<AppState>) -> Result<(), String> {
     let db = state.db.lock().unwrap();
     db.execute(
-        "UPDATE books SET total_pages = ?2 WHERE id = ?1",
-        rusqlite::params![id, total],
+        "UPDATE books SET total_pages = ?2, updated_at = ?3 WHERE id = ?1",
+        rusqlite::params![id, total, now_ms()],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -267,8 +360,8 @@ fn save_cover(hash: String, data: Vec<u8>, state: State<AppState>) -> Result<Str
     fs::write(&path, data).map_err(|e| format!("保存封面失败：{e}"))?;
     let db = state.db.lock().unwrap();
     db.execute(
-        "UPDATE books SET cover_path = ?2 WHERE hash = ?1",
-        rusqlite::params![hash, format!("covers/{hash}.png")],
+        "UPDATE books SET cover_path = ?2, updated_at = ?3 WHERE hash = ?1",
+        rusqlite::params![hash, format!("covers/{hash}.png"), now_ms()],
     )
     .map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
@@ -385,11 +478,9 @@ fn do_lookup(dict: Option<&Connection>, word: &str) -> LookupResult {
         };
     }
     // ② forms 反查词形还原
-    if let Ok(lemma) =
-        db.query_row("SELECT lemma FROM forms WHERE form = ?1", [&w], |r| {
-            r.get::<_, String>(0)
-        })
-    {
+    if let Ok(lemma) = db.query_row("SELECT lemma FROM forms WHERE form = ?1", [&w], |r| {
+        r.get::<_, String>(0)
+    }) {
         if let Some((phonetic, translation)) = get(&lemma) {
             return LookupResult {
                 found: true,
@@ -434,9 +525,15 @@ fn init_db(base: &Path) -> Result<Connection, Box<dyn std::error::Error>> {
     let db = Connection::open(base.join("library.db"))?;
     // WAL：保证强杀进程时已提交的进度不丢
     db.pragma_update(None, "journal_mode", "WAL")?;
-    create_schema(&db)?;
-    normalize_book_paths(&db)?;
+    init_library_db(&db)?;
     Ok(db)
+}
+
+fn init_library_db(db: &Connection) -> rusqlite::Result<()> {
+    create_schema(db)?;
+    migrate_schema(db)?;
+    normalize_book_paths(db)?;
+    Ok(())
 }
 
 fn create_schema(db: &Connection) -> rusqlite::Result<()> {
@@ -453,6 +550,28 @@ fn create_schema(db: &Connection) -> rusqlite::Result<()> {
             last_opened_at TEXT
         );",
     )
+}
+
+fn migrate_schema(db: &Connection) -> rusqlite::Result<()> {
+    let version: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version >= 2 {
+        return Ok(());
+    }
+
+    db.execute_batch(
+        "BEGIN IMMEDIATE;
+         ALTER TABLE books ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE books ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE books ADD COLUMN synced_at INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE books ADD COLUMN cloud_state TEXT NOT NULL DEFAULT 'local';
+         CREATE TABLE IF NOT EXISTS sync_meta (
+             key TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         );
+         PRAGMA user_version = 2;
+         COMMIT;",
+    )?;
+    Ok(())
 }
 
 /// 旧版本（≤v0.2.2）把绝对路径写入 file_path/cover_path，数据目录一迁移就全部悬空。
@@ -538,6 +657,8 @@ fn is_empty_skeleton(dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+    use std::time::Duration;
 
     fn dict() -> Connection {
         Connection::open_with_flags(
@@ -545,6 +666,22 @@ mod tests {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .expect("测试需要 resources/dict.db 存在")
+    }
+
+    fn memory_library_db() -> Connection {
+        let db = Connection::open_in_memory().unwrap();
+        init_library_db(&db).unwrap();
+        db
+    }
+
+    fn insert_test_book(db: &Connection, hash: &str, title: &str) -> i64 {
+        db.execute(
+            "INSERT INTO books (hash, title, file_path, added_at, updated_at)
+             VALUES (?1, ?2, ?3, '2026-01-01', 1)",
+            rusqlite::params![hash, title, format!("books/{hash}.pdf")],
+        )
+        .unwrap();
+        db.last_insert_rowid()
     }
 
     #[test]
@@ -610,6 +747,97 @@ mod tests {
         assert!(suffix_candidates("happiest").contains(&"happy".to_string()));
     }
 
+    // ---- SQLite v2 迁移 / 墓碑 / updated_at ----
+
+    #[test]
+    fn migrate_schema_sets_user_version_2_and_is_idempotent() {
+        let db = Connection::open_in_memory().unwrap();
+        create_schema(&db).unwrap();
+
+        migrate_schema(&db).unwrap();
+        let version: i64 = db
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+
+        let sync_meta_exists: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_meta'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sync_meta_exists, 1);
+
+        migrate_schema(&db).unwrap();
+        let version_again: i64 = db
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version_again, 2);
+    }
+
+    #[test]
+    fn tombstoned_book_is_hidden_from_list_books() {
+        let db = memory_library_db();
+        let id = insert_test_book(&db, "deadbeef", "墓碑书");
+
+        tombstone_book(&db, id).unwrap();
+
+        let base = std::env::temp_dir();
+        let books = list_books_in_db(&db, &base, "added", "").unwrap();
+        assert!(books.is_empty());
+        let deleted: i64 = db
+            .query_row("SELECT deleted FROM books WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(deleted, 1);
+    }
+
+    #[test]
+    fn readd_same_hash_revives_deleted_book() {
+        let db = memory_library_db();
+        let id = insert_test_book(&db, "cafebabe", "已删除旧书");
+        db.execute("UPDATE books SET deleted = 1 WHERE id = ?1", [id])
+            .unwrap();
+
+        revive_deleted_book_record(&db, id, "books/cafebabe.pdf").unwrap();
+
+        let (deleted, file_path): (i64, String) = db
+            .query_row(
+                "SELECT deleted, file_path FROM books WHERE hash = 'cafebabe'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(file_path, "books/cafebabe.pdf");
+    }
+
+    #[test]
+    fn update_progress_advances_updated_at() {
+        let db = memory_library_db();
+        let id = insert_test_book(&db, "feedface", "进度书");
+        let before: i64 = db
+            .query_row("SELECT updated_at FROM books WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        thread::sleep(Duration::from_millis(2));
+        update_progress_in_db(&db, id, 42).unwrap();
+
+        let (current_page, after): (i64, i64) = db
+            .query_row(
+                "SELECT current_page, updated_at FROM books WHERE id = ?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(current_page, 42);
+        assert!(after > before, "updated_at 应前进");
+    }
+
     // ---- 路径相对化（老库绝对路径改写）----
 
     #[test]
@@ -622,10 +850,7 @@ mod tests {
         db.execute(
             "INSERT INTO books (hash, title, file_path, cover_path, added_at)
              VALUES ('abc', 't', ?1, ?2, '2026-01-01')",
-            rusqlite::params![
-                abs_book.to_string_lossy(),
-                abs_cover.to_string_lossy()
-            ],
+            rusqlite::params![abs_book.to_string_lossy(), abs_cover.to_string_lossy()],
         )
         .unwrap();
         normalize_book_paths(&db).unwrap();
@@ -661,7 +886,11 @@ mod tests {
     #[test]
     fn to_abs_joins_relative_segments() {
         let base = std::env::temp_dir();
-        let expect = base.join("books").join("x.pdf").to_string_lossy().to_string();
+        let expect = base
+            .join("books")
+            .join("x.pdf")
+            .to_string_lossy()
+            .to_string();
         assert_eq!(to_abs(&base, "books/x.pdf"), expect);
     }
 
