@@ -62,6 +62,8 @@ export default function Library({ onOpenBook }: Props) {
   const [confirmRemove, setConfirmRemove] = useState<Book | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [syncState, setSyncState] = useState<SyncStatus>({
     signed_in: false,
     email: null,
@@ -181,6 +183,14 @@ export default function Library({ onOpenBook }: Props) {
     };
   }, [ctxMenu]);
 
+  // 点击任意处关闭「更多」菜单（触发按钮上有 stopPropagation）
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = () => setMoreOpen(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [moreOpen]);
+
   useEffect(() => {
     if (renaming) renameInputRef.current?.select();
   }, [renaming]);
@@ -243,54 +253,165 @@ export default function Library({ onOpenBook }: Props) {
 
   return (
     <div className={"library" + (dragOver ? " drag-over" : "")}>
-      <header className="library-toolbar">
-        <div className="library-toolbar-main">
-          <h1 className="app-title">Shelf</h1>
-          <button className="account-trigger" onClick={() => setAccountOpen(true)}>
-            {syncState.signed_in ? (
-              <>
-                <span className="account-trigger-badge" aria-hidden="true">
-                  {accountInitial}
-                </span>
-                <span className="account-trigger-email">{syncState.email}</span>
-                {syncState.syncing && (
-                  <span className="account-trigger-sync" aria-label="同步中" />
-                )}
-              </>
-            ) : (
-              "登录"
-            )}
-          </button>
-        </div>
-        <div className="library-toolbar-actions">
-          <input
-            className="search-box"
-            type="search"
-            placeholder="搜索书名…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <select
-            className="sort-select"
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortKey)}
+      {/* Apple Books 式头部：大标题 + 两个小圆钮，其余控件全部收进「⋯」菜单 */}
+      <header className="library-header">
+        <h1 className="page-title">书库</h1>
+        <div className="header-actions">
+          <button
+            className="icon-btn"
+            aria-label="添加书籍"
+            title="添加书籍"
+            onClick={handleAddClick}
+            disabled={busy}
           >
-            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
-              <option key={k} value={k}>
-                {SORT_LABELS[k]}
-              </option>
-            ))}
-          </select>
-          <button className="btn primary" onClick={handleAddClick} disabled={busy}>
-            {busy ? "导入中…" : "＋ 添加书籍"}
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M10 4.5v11M4.5 10h11"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
           </button>
+          <div className="more-wrap">
+            <button
+              className="icon-btn"
+              aria-label="更多"
+              title="更多"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMoreOpen((v) => !v);
+              }}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <circle cx="4.6" cy="10" r="1.7" fill="currentColor" />
+                <circle cx="10" cy="10" r="1.7" fill="currentColor" />
+                <circle cx="15.4" cy="10" r="1.7" fill="currentColor" />
+              </svg>
+            </button>
+            {moreOpen && (
+              <div className="more-menu" onClick={(e) => e.stopPropagation()}>
+                <button
+                  onClick={() => {
+                    setSearchOpen(true);
+                    setMoreOpen(false);
+                  }}
+                >
+                  搜索书名
+                </button>
+                <button
+                  onClick={() => {
+                    setAccountOpen(true);
+                    setMoreOpen(false);
+                  }}
+                >
+                  {syncState.signed_in ? (
+                    <span className="more-account">
+                      <span className="account-trigger-badge" aria-hidden="true">
+                        {accountInitial}
+                      </span>
+                      账号与同步
+                      {syncState.syncing && (
+                        <span className="account-trigger-sync" aria-label="同步中" />
+                      )}
+                    </span>
+                  ) : (
+                    "登录与同步"
+                  )}
+                </button>
+                <div className="more-sep" />
+                <div className="more-group-label">排序方式</div>
+                {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+                  <button
+                    key={k}
+                    className={sort === k ? "checked" : ""}
+                    onClick={() => {
+                      setSort(k);
+                      setMoreOpen(false);
+                    }}
+                  >
+                    {SORT_LABELS[k]}
+                    {sort === k && <span className="check">✓</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
+      {/* 搜索行：从「⋯ → 搜索书名」展开，取消即收起并清空 */}
+      {searchOpen && (
+        <div className="search-row">
+          <div className="search-wrap">
+            <svg className="search-icon" viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="9" cy="9" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+              <line
+                x1="13.2"
+                y1="13.2"
+                x2="17"
+                y2="17"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+            </svg>
+            <input
+              className="search-box"
+              type="search"
+              placeholder="搜索书名…"
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          <button
+            className="search-cancel"
+            onClick={() => {
+              setSearchOpen(false);
+              setQuery("");
+            }}
+          >
+            取消
+          </button>
+        </div>
+      )}
+
       {books.length === 0 ? (
         <div className="empty-hint">
-          <p>书库还是空的</p>
-          <p>点击「添加书籍」或把 PDF 拖到窗口里</p>
+          {/* 书架插画：灰调为主、一本赭色点缀（Shelf 特色色只做提亮） */}
+          <svg className="empty-illustration" viewBox="0 0 140 104" aria-hidden="true">
+            <rect x="14" y="30" width="14" height="56" rx="2" fill="#D6D6DB" />
+            <rect x="32" y="22" width="16" height="64" rx="2" fill="#C2C2C9" />
+            <rect x="52" y="34" width="13" height="52" rx="2" fill="#B45327" opacity="0.9" />
+            <g transform="rotate(14 96 62)">
+              <rect x="88" y="30" width="15" height="58" rx="2" fill="#E4E4E9" />
+              <line
+                x1="95.5"
+                y1="38"
+                x2="95.5"
+                y2="44"
+                stroke="#fff"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </g>
+            <line
+              x1="6"
+              y1="88"
+              x2="134"
+              y2="88"
+              stroke="#1D1D1F"
+              strokeWidth="3"
+              strokeLinecap="round"
+              opacity="0.5"
+            />
+          </svg>
+          <p className="empty-title">书库还是空的</p>
+          <p className="empty-sub">把 PDF 拖进窗口，或从文件里挑一本开始</p>
+          <button className="btn primary empty-action" onClick={handleAddClick} disabled={busy}>
+            {busy ? "导入中…" : "＋ 添加第一本书"}
+          </button>
         </div>
       ) : (
         <div className="book-grid">
@@ -311,20 +432,38 @@ export default function Library({ onOpenBook }: Props) {
               title={isTouchDevice ? `${book.title}（点按打开）` : `${book.title}（双击打开）`}
             >
               <BookCover book={book} />
-              <button
-                className="book-card-menu"
-                type="button"
-                aria-label={`管理《${book.title}》`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openTouchMenu(book, e.currentTarget);
-                }}
-              >
-                ⋯
-              </button>
-              {book.cloud_state === "remote" && <span className="cloud-badge">云端</span>}
-              <div className="book-title">{book.title}</div>
-              <div className="book-progress">{progressText(book)}</div>
+              {/* Apple Books 式元信息行：进度居左，云状态与管理按钮居右 */}
+              <div className="book-meta">
+                <span className="book-meta-progress">{progressText(book)}</span>
+                <span className="book-meta-icons">
+                  {book.cloud_state === "remote" && (
+                    <svg className="meta-cloud" viewBox="0 0 22 16" aria-label="云端待下载">
+                      <path
+                        d="M6.2 13.5h9.6a3.7 3.7 0 0 0 .7-7.33A5.5 5.5 0 0 0 5.7 6.9a3.3 3.3 0 0 0 .5 6.6Z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                  <button
+                    className="meta-more"
+                    type="button"
+                    aria-label={`管理《${book.title}》`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openTouchMenu(book, e.currentTarget);
+                    }}
+                  >
+                    <svg viewBox="0 0 16 4" aria-hidden="true">
+                      <circle cx="2" cy="2" r="1.6" fill="currentColor" />
+                      <circle cx="8" cy="2" r="1.6" fill="currentColor" />
+                      <circle cx="14" cy="2" r="1.6" fill="currentColor" />
+                    </svg>
+                  </button>
+                </span>
+              </div>
             </div>
           ))}
         </div>
@@ -408,9 +547,10 @@ export default function Library({ onOpenBook }: Props) {
   );
 }
 
+/** Apple Books 式进度文案：未读 / 百分比 / 读完 */
 function progressText(book: Book): string {
-  if (!book.total_pages) return "未读";
-  if (!book.last_opened_at) return `共 ${book.total_pages} 页`;
+  if (!book.total_pages || !book.last_opened_at) return "未读";
   const pct = Math.round((book.current_page / book.total_pages) * 100);
-  return `${book.current_page}/${book.total_pages} · ${pct}%`;
+  if (pct >= 100) return "已读完";
+  return `${Math.max(1, pct)}%`;
 }
