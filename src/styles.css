@@ -210,6 +210,28 @@ button {
   background: #e2e0d8;
 }
 
+.book-card-menu {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 2;
+}
+.book-card-menu:active {
+  background: rgba(236, 235, 230, 0.98);
+}
+
 .cover {
   aspect-ratio: 3 / 4.2;
   border-radius: 4px;
@@ -488,6 +510,27 @@ button {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-wrap: nowrap;
+  transform: translateY(0);
+  transform-origin: top;
+  transition:
+    transform 180ms ease,
+    max-height 180ms ease,
+    padding 180ms ease,
+    border-color 180ms ease,
+    opacity 180ms ease;
+  max-height: 72px;
+  opacity: 1;
+  overflow: hidden;
+}
+
+.reader.toolbar-hidden .reader-toolbar {
+  transform: translateY(-100%);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom-color: transparent;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .reader-title {
@@ -619,6 +662,7 @@ button {
   /* 全局 user-select: none 会禁掉双击选词，这里必须单独放开 */
   user-select: text;
   -webkit-user-select: text;
+  -webkit-touch-callout: none;
 }
 .textLayer :is(span, br) {
   color: transparent;
@@ -830,6 +874,14 @@ button {
 
   .book-card {
     padding: 12px;
+  }
+
+  .book-card-menu {
+    display: inline-flex;
+  }
+
+  .cloud-badge {
+    right: 40px;
   }
 }
 

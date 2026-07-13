@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { saveCover, setTotalPages, updateProgress, type Book } from "../api";
 import { isPasswordError, openPdf, pdfjs, renderCoverPng, type PDFDocumentProxy } from "../pdf";
 import { cleanWord, localDictSource, type LookupResult } from "../dict";
-import { isModKey } from "../platform";
+import { isModKey, isTouchDevice } from "../platform";
 import WordPopup, { type PopupAnchor } from "./WordPopup";
 
 interface Props {
@@ -21,6 +21,26 @@ interface OutlineNode {
 // WebKit 专有 gesture 事件（TS 无内置类型），继承 Event 以便从监听器参数直接窄化
 interface WebKitGestureEvent extends Event {
   scale: number;
+}
+
+type CaretRangeDocument = Document & {
+  caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+};
+
+interface ExpandedWordRange {
+  word: string;
+  range: Range;
+}
+
+interface TouchTrack {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  longPressTriggered: boolean;
+  textTarget: boolean;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -42,6 +62,7 @@ export default function Reader({ book, onBack }: Props) {
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [popup, setPopup] = useState<{ result: LookupResult; anchor: PopupAnchor } | null>(null);
   const [toast, setToast] = useState("");
+  const [toolbarHidden, setToolbarHidden] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PDFDocumentProxy | null>(null);
@@ -58,9 +79,20 @@ export default function Reader({ book, onBack }: Props) {
   const isScannedRef = useRef(false);
   const scanToastShownRef = useRef(false);
   const popupJustClosedRef = useRef(false);
+  const gestureActiveRef = useRef(false);
+  const activeTouchPointersRef = useRef(new Set<number>());
+  const touchTrackRef = useRef<TouchTrack | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
   const step = twoPage ? 2 : 1;
 
   popupRef.current = popup;
+
+  function clearLongPressTimer() {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }
 
   // ---------- 文档加载（含密码重试） ----------
   const loadDoc = useCallback(
@@ -129,6 +161,7 @@ export default function Reader({ book, onBack }: Props) {
     window.addEventListener("beforeunload", flushProgress);
     return () => {
       window.removeEventListener("beforeunload", flushProgress);
+      clearLongPressTimer();
       flushProgress();
     };
   }, [flushProgress]);
@@ -209,16 +242,21 @@ export default function Reader({ book, onBack }: Props) {
     }
     function onGestureStart(e: Event) {
       const gestureEvent = e as WebKitGestureEvent;
+      gestureActiveRef.current = true;
+      clearLongPressTimer();
+      touchTrackRef.current = null;
       gestureStartScaleRef.current = lastScaleRef.current;
       gestureEvent.preventDefault();
     }
     function onGestureChange(e: Event) {
       const gestureEvent = e as WebKitGestureEvent;
+      gestureActiveRef.current = true;
       setCustomScale(clamp(gestureStartScaleRef.current * gestureEvent.scale, 0.2, 6));
       setZoom("custom");
       gestureEvent.preventDefault();
     }
     function onGestureEnd(e: Event) {
+      gestureActiveRef.current = false;
       (e as WebKitGestureEvent).preventDefault();
     }
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -257,7 +295,27 @@ export default function Reader({ book, onBack }: Props) {
   }, [toast]);
 
   // ---------- 取词 ----------
-  const onDoubleClick = useCallback(async () => {
+  const lookupWordAtAnchor = useCallback(
+    async (word: string, anchor: PopupAnchor) => {
+      if (isScannedRef.current) {
+        if (!scanToastShownRef.current) {
+          scanToastShownRef.current = true;
+          setToast("本书为扫描版，暂不支持取词");
+        }
+        return;
+      }
+      if (!word) return;
+      try {
+        const result = await localDictSource.lookup(word);
+        setPopup({ result, anchor });
+      } catch {
+        setToast("查词失败，请重试");
+      }
+    },
+    []
+  );
+
+  const lookupSelectionWord = useCallback(async () => {
     if (isScannedRef.current) {
       if (!scanToastShownRef.current) {
         scanToastShownRef.current = true;
@@ -271,16 +329,30 @@ export default function Reader({ book, onBack }: Props) {
     if (!word) return;
     const rect = sel.getRangeAt(0).getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return;
-    try {
-      const result = await localDictSource.lookup(word);
-      setPopup({
-        result,
-        anchor: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+    await lookupWordAtAnchor(word, {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+    });
+  }, [lookupWordAtAnchor]);
+
+  const lookupWordAtPoint = useCallback(
+    async (x: number, y: number) => {
+      const range = getCaretRangeFromPoint(document, x, y);
+      const expanded = range ? expandWordRange(range) : null;
+      if (!expanded) return;
+      const rect = getRangeRect(expanded.range);
+      if (!rect) return;
+      await lookupWordAtAnchor(expanded.word, {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
       });
-    } catch {
-      setToast("查词失败，请重试");
-    }
-  }, []);
+    },
+    [lookupWordAtAnchor]
+  );
 
   // 点击弹窗以外区域关闭弹窗（弹窗内部 mousedown 已 stopPropagation）
   const onContainerMouseDown = useCallback(() => {
@@ -307,6 +379,108 @@ export default function Reader({ book, onBack }: Props) {
     },
     [prev, next]
   );
+
+  const handleTouchPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!isTouchDevice || e.pointerType !== "touch") return;
+      activeTouchPointersRef.current.add(e.pointerId);
+      if (activeTouchPointersRef.current.size > 1 || gestureActiveRef.current) {
+        clearLongPressTimer();
+        touchTrackRef.current = null;
+        return;
+      }
+      if (popupRef.current) {
+        setPopup(null);
+        popupJustClosedRef.current = true;
+      }
+      const textTarget = Boolean((e.target as HTMLElement).closest(".textLayer"));
+      touchTrackRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        longPressTriggered: false,
+        textTarget,
+      };
+      clearLongPressTimer();
+      if (!textTarget) return;
+      longPressTimerRef.current = window.setTimeout(() => {
+        const track = touchTrackRef.current;
+        if (!track || track.pointerId !== e.pointerId) return;
+        if (gestureActiveRef.current || activeTouchPointersRef.current.size !== 1) return;
+        const movedX = Math.abs(track.lastX - track.startX);
+        const movedY = Math.abs(track.lastY - track.startY);
+        if (movedX >= 10 || movedY >= 10) return;
+        track.longPressTriggered = true;
+        popupJustClosedRef.current = false;
+        void lookupWordAtPoint(track.lastX, track.lastY);
+      }, 500);
+    },
+    [lookupWordAtPoint]
+  );
+
+  const handleTouchPointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isTouchDevice || e.pointerType !== "touch") return;
+    const track = touchTrackRef.current;
+    if (!track || track.pointerId !== e.pointerId) return;
+    track.lastX = e.clientX;
+    track.lastY = e.clientY;
+    if (
+      Math.abs(track.lastX - track.startX) >= 10 ||
+      Math.abs(track.lastY - track.startY) >= 10
+    ) {
+      clearLongPressTimer();
+    }
+  }, []);
+
+  const finishTouchPointer = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!isTouchDevice || e.pointerType !== "touch") return;
+      activeTouchPointersRef.current.delete(e.pointerId);
+      const track = touchTrackRef.current;
+      clearLongPressTimer();
+      if (!track || track.pointerId !== e.pointerId) return;
+      touchTrackRef.current = null;
+      if (gestureActiveRef.current || track.longPressTriggered) {
+        popupJustClosedRef.current = false;
+        return;
+      }
+      const dx = e.clientX - track.startX;
+      const dy = e.clientY - track.startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      const el = containerRef.current;
+      if (!el) return;
+      if (absX > 60 && absX > absY && canFlipFromHorizontalSwipe(el, dx)) {
+        popupJustClosedRef.current = false;
+        if (dx < 0) next();
+        else prev();
+        return;
+      }
+      if (absX >= 10 || absY >= 10) return;
+      if (popupJustClosedRef.current) {
+        popupJustClosedRef.current = false;
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const rel = (e.clientX - rect.left) / rect.width;
+      if (rel < 0.25) prev();
+      else if (rel > 0.75) next();
+      else setToolbarHidden((hidden) => !hidden);
+    },
+    [next, prev]
+  );
+
+  const handleTouchPointerCancel = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isTouchDevice || e.pointerType !== "touch") return;
+    activeTouchPointersRef.current.delete(e.pointerId);
+    clearLongPressTimer();
+    popupJustClosedRef.current = false;
+    if (touchTrackRef.current?.pointerId === e.pointerId) {
+      touchTrackRef.current = null;
+    }
+  }, []);
 
   // 容器尺寸变化时重新计算适配缩放
   useEffect(() => {
@@ -443,7 +617,7 @@ export default function Reader({ book, onBack }: Props) {
   }
 
   return (
-    <div className="reader">
+    <div className={"reader" + (isTouchDevice && toolbarHidden ? " toolbar-hidden" : "")}>
       <header className="reader-toolbar">
         <button className="btn" onClick={goBack} title="返回书库（Esc）">
           ← 书库
@@ -505,9 +679,13 @@ export default function Reader({ book, onBack }: Props) {
         <div
           className="page-container"
           ref={containerRef}
-          onDoubleClick={onDoubleClick}
-          onMouseDown={onContainerMouseDown}
-          onClick={onContainerClick}
+          onDoubleClick={lookupSelectionWord}
+          onMouseDown={isTouchDevice ? undefined : onContainerMouseDown}
+          onClick={isTouchDevice ? undefined : onContainerClick}
+          onPointerDown={handleTouchPointerDown}
+          onPointerMove={handleTouchPointerMove}
+          onPointerUp={finishTouchPointer}
+          onPointerCancel={handleTouchPointerCancel}
         >
           <div className="page-stage">
             {/* lang="en"：html 是 zh-CN，会让 span 的通用 sans-serif 解析成中文字体
@@ -657,4 +835,87 @@ async function loadOutline(doc: PDFDocumentProxy): Promise<OutlineNode[]> {
   } catch {
     return [];
   }
+}
+
+function getCaretRangeFromPoint(doc: Document, x: number, y: number): Range | null {
+  const caretDoc = doc as CaretRangeDocument;
+  if (typeof caretDoc.caretRangeFromPoint === "function") {
+    return caretDoc.caretRangeFromPoint(x, y);
+  }
+  const caretPosition = caretDoc.caretPositionFromPoint?.(x, y);
+  if (!caretPosition) return null;
+  const range = doc.createRange();
+  range.setStart(caretPosition.offsetNode, caretPosition.offset);
+  range.collapse(true);
+  return range;
+}
+
+function expandWordRange(range: Range): ExpandedWordRange | null {
+  const textPoint = resolveTextPoint(range.startContainer, range.startOffset);
+  if (!textPoint) return null;
+  const { node, offset } = textPoint;
+  const text = node.textContent ?? "";
+  if (!text) return null;
+  const clampedOffset = clamp(offset, 0, text.length);
+  let start = clampedOffset;
+  let end = clampedOffset;
+  if (clampedOffset < text.length && isAsciiLetter(text[clampedOffset])) {
+    end = clampedOffset + 1;
+  } else if (clampedOffset > 0 && isAsciiLetter(text[clampedOffset - 1])) {
+    start = clampedOffset - 1;
+  } else {
+    return null;
+  }
+  while (start > 0 && isAsciiLetter(text[start - 1])) start -= 1;
+  while (end < text.length && isAsciiLetter(text[end])) end += 1;
+  const word = cleanWord(text.slice(start, end));
+  if (!word) return null;
+  const expanded = range.cloneRange();
+  expanded.setStart(node, start);
+  expanded.setEnd(node, end);
+  return { word, range: expanded };
+}
+
+function resolveTextPoint(container: Node, offset: number): { node: Text; offset: number } | null {
+  if (container.nodeType === Node.TEXT_NODE) {
+    return { node: container as Text, offset };
+  }
+  const children = container.childNodes;
+  const nextNode = children.item(offset);
+  const prevNode = children.item(Math.max(0, offset - 1));
+  const nextTextNode = findTextNode(nextNode, true);
+  if (nextTextNode) return { node: nextTextNode, offset: 0 };
+  const prevTextNode = findTextNode(prevNode, false);
+  if (!prevTextNode) return null;
+  return { node: prevTextNode, offset: prevTextNode.textContent?.length ?? 0 };
+}
+
+function findTextNode(node: Node | null, forward: boolean): Text | null {
+  if (!node) return null;
+  if (node.nodeType === Node.TEXT_NODE) return node as Text;
+  const children = Array.from(node.childNodes);
+  const ordered = forward ? children : children.reverse();
+  for (const child of ordered) {
+    const textNode = findTextNode(child, forward);
+    if (textNode) return textNode;
+  }
+  return null;
+}
+
+function isAsciiLetter(char: string): boolean {
+  return /^[A-Za-z]$/.test(char);
+}
+
+function getRangeRect(range: Range): DOMRect | null {
+  const rect = range.getBoundingClientRect();
+  if (rect.width > 0 || rect.height > 0) return rect;
+  const firstRect = range.getClientRects()[0];
+  return firstRect ?? null;
+}
+
+function canFlipFromHorizontalSwipe(container: HTMLDivElement, dx: number): boolean {
+  const maxScrollLeft = container.scrollWidth - container.clientWidth;
+  if (maxScrollLeft <= 1) return true;
+  if (dx < 0) return container.scrollLeft >= maxScrollLeft - 1;
+  return container.scrollLeft <= 1;
 }

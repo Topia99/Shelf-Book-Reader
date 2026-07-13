@@ -301,7 +301,9 @@ export default function Library({ onOpenBook }: Props) {
               onClick={() => {
                 if (isTouchDevice) tryOpenBook(book);
               }}
-              onDoubleClick={() => tryOpenBook(book)}
+              onDoubleClick={() => {
+                if (!isTouchDevice) tryOpenBook(book);
+              }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setCtxMenu({ x: e.clientX, y: e.clientY, book });
