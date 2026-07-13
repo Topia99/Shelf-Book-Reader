@@ -3095,6 +3095,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "url",
 ]
 
 [[package]]

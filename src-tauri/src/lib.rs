@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Manager, State};
+use url::Url;
 
 struct AppState {
     db: Mutex<Connection>,
@@ -97,6 +98,17 @@ fn sha256_of_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn resolve_input_path(path_str: &str) -> Result<PathBuf, String> {
+    if let Ok(url) = Url::parse(path_str) {
+        if url.scheme() == "file" {
+            return url
+                .to_file_path()
+                .map_err(|_| "无法解析文件路径".to_string());
+        }
+    }
+    Ok(PathBuf::from(path_str))
+}
+
 /// 统一使用 Unix 毫秒时间戳，供后续云同步按 updated_at 做脏数据扫描
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -166,7 +178,11 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
         book: None,
     };
 
-    let src = Path::new(path_str);
+    let src_path = match resolve_input_path(path_str) {
+        Ok(path) => path,
+        Err(msg) => return err(msg),
+    };
+    let src = src_path.as_path();
     if !src
         .extension()
         .map(|e| e.eq_ignore_ascii_case("pdf"))

@@ -24,22 +24,40 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**"]
+        "scope": [
+          "$APPDATA/**"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "app", "dmg"],
-    "icon": ["icons/icon.ico", "icons/icon.png", "icons/icon.icns"],
-    "resources": ["resources/dict.db"],
+    "targets": [
+      "nsis",
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
+    "resources": [
+      "resources/dict.db"
+    ],
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["SimpChinese", "English"],
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico"
       }
+    },
+    "iOS": {
+      "developmentTeam": "AZ3MB6QPUV"
     }
   }
 }
