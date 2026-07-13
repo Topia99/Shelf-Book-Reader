@@ -238,41 +238,47 @@ export default function Library({ onOpenBook }: Props) {
   return (
     <div className={"library" + (dragOver ? " drag-over" : "")}>
       <header className="library-toolbar">
-        <h1 className="app-title">Shelf</h1>
-        <input
-          className="search-box"
-          type="search"
-          placeholder="搜索书名…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <button className="account-trigger" onClick={() => setAccountOpen(true)}>
-          {syncState.signed_in ? (
-            <>
-              <span className="account-trigger-badge" aria-hidden="true">
-                {accountInitial}
-              </span>
-              <span className="account-trigger-email">{syncState.email}</span>
-              {syncState.syncing && <span className="account-trigger-sync" aria-label="同步中" />}
-            </>
-          ) : (
-            "登录"
-          )}
-        </button>
-        <select
-          className="sort-select"
-          value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey)}
-        >
-          {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
-            <option key={k} value={k}>
-              {SORT_LABELS[k]}
-            </option>
-          ))}
-        </select>
-        <button className="btn primary" onClick={handleAddClick} disabled={busy}>
-          {busy ? "导入中…" : "＋ 添加书籍"}
-        </button>
+        <div className="library-toolbar-main">
+          <h1 className="app-title">Shelf</h1>
+          <button className="account-trigger" onClick={() => setAccountOpen(true)}>
+            {syncState.signed_in ? (
+              <>
+                <span className="account-trigger-badge" aria-hidden="true">
+                  {accountInitial}
+                </span>
+                <span className="account-trigger-email">{syncState.email}</span>
+                {syncState.syncing && (
+                  <span className="account-trigger-sync" aria-label="同步中" />
+                )}
+              </>
+            ) : (
+              "登录"
+            )}
+          </button>
+        </div>
+        <div className="library-toolbar-actions">
+          <input
+            className="search-box"
+            type="search"
+            placeholder="搜索书名…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <select
+            className="sort-select"
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+          >
+            {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+              <option key={k} value={k}>
+                {SORT_LABELS[k]}
+              </option>
+            ))}
+          </select>
+          <button className="btn primary" onClick={handleAddClick} disabled={busy}>
+            {busy ? "导入中…" : "＋ 添加书籍"}
+          </button>
+        </div>
       </header>
 
       {books.length === 0 ? (
@@ -302,7 +308,8 @@ export default function Library({ onOpenBook }: Props) {
         </div>
       )}
 
-      {dragOver && <div className="drop-overlay">松开鼠标，添加 PDF 到书库</div>}
+      {/* 审计清单次要项：拖放提示文案去掉“鼠标”假设 */}
+      {dragOver && <div className="drop-overlay">松开以添加 PDF 到书库</div>}
 
       {ctxMenu && (
         <div className="context-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>

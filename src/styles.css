@@ -11,6 +11,11 @@
   --accent: #b3541e;
   --accent-dark: #933f10;
   --danger: #c0392b;
+  /* 审计清单补充项：为 iOS/iPadOS 安全区暴露统一变量 */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
 }
 
 html,
@@ -42,6 +47,11 @@ button {
 .btn:hover:not(:disabled) {
   border-color: var(--accent);
 }
+/* 审计清单次要项：为触屏补充按下态，桌面 hover 保留 */
+.btn:active:not(:disabled) {
+  border-color: var(--accent);
+  background: #ecebe6;
+}
 .btn:disabled {
   opacity: 0.45;
   cursor: default;
@@ -54,10 +64,16 @@ button {
 .btn.primary:hover:not(:disabled) {
   background: var(--accent-dark);
 }
+.btn.primary:active:not(:disabled) {
+  background: #7f330b;
+}
 .btn.danger {
   background: var(--danger);
   border-color: var(--danger);
   color: #fff;
+}
+.btn.danger:active:not(:disabled) {
+  background: #a93226;
 }
 .btn.active {
   background: #f3e3d3;
@@ -70,6 +86,8 @@ button {
   height: 100%;
   display: flex;
   flex-direction: column;
+  /* 审计清单补充项：顶层容器应用安全区内边距，避免刘海和圆角遮挡 */
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
 }
 
 .library-toolbar {
@@ -79,6 +97,18 @@ button {
   padding: 12px 20px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+}
+
+.library-toolbar-main,
+.library-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.library-toolbar-actions {
+  flex: 1;
 }
 
 .app-title {
@@ -116,6 +146,10 @@ button {
 .account-trigger:hover {
   border-color: var(--accent);
 }
+.account-trigger:active {
+  border-color: var(--accent);
+  background: #f0efe9;
+}
 .account-trigger-badge {
   width: 24px;
   height: 24px;
@@ -150,7 +184,6 @@ button {
   border-radius: 6px;
   background: var(--surface);
   font-size: 13px;
-  margin-left: auto;
 }
 
 .book-grid {
@@ -172,6 +205,9 @@ button {
 }
 .book-card:hover {
   background: #ecebe6;
+}
+.book-card:active {
+  background: #e2e0d8;
 }
 
 .cover {
@@ -270,6 +306,9 @@ button {
 .context-menu button:hover {
   background: #f0efe9;
 }
+.context-menu button:active {
+  background: #e6e3db;
+}
 .context-menu button.danger {
   color: var(--danger);
 }
@@ -288,7 +327,8 @@ button {
   background: var(--surface);
   border-radius: 10px;
   padding: 20px 24px;
-  width: 380px;
+  /* 审计清单 CSS Top 5 #3：弹窗固定宽度改为窄屏自适应 */
+  width: min(380px, calc(100vw - 32px - var(--safe-left) - var(--safe-right)));
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
 }
 .modal h3 {
@@ -318,7 +358,8 @@ button {
 }
 
 .account-modal {
-  width: 420px;
+  /* 审计清单 CSS Top 5 #3：账号弹窗沿用原宽度上限，移动端收缩 */
+  width: min(420px, calc(100vw - 32px - var(--safe-left) - var(--safe-right)));
 }
 .account-header {
   display: flex;
@@ -335,6 +376,9 @@ button {
   line-height: 1;
   cursor: pointer;
   padding: 0;
+}
+.account-close:active {
+  color: var(--text);
 }
 .account-section {
   display: flex;
@@ -432,6 +476,8 @@ button {
   height: 100%;
   display: flex;
   flex-direction: column;
+  /* 审计清单补充项：顶层容器应用安全区内边距，避免刘海和圆角遮挡 */
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
 }
 
 .reader-toolbar {
@@ -520,6 +566,9 @@ button {
 .outline-item:hover:not(:disabled) {
   background: #f0efe9;
 }
+.outline-item:active:not(:disabled) {
+  background: #e6e3db;
+}
 .outline-item.active {
   color: var(--accent-dark);
   font-weight: 600;
@@ -534,6 +583,7 @@ button {
   overflow: auto;
   position: relative;
   background: #63615c;
+  -webkit-overflow-scrolling: touch;
 }
 
 .page-stage {
@@ -643,6 +693,9 @@ button {
 .word-popup-speak:hover {
   background: #f0efe9;
 }
+.word-popup-speak:active {
+  background: #e6e3db;
+}
 .word-popup-close {
   margin-left: auto;
   border: none;
@@ -655,6 +708,10 @@ button {
 }
 .word-popup-close:hover {
   background: #f0efe9;
+  color: var(--text);
+}
+.word-popup-close:active {
+  background: #e6e3db;
   color: var(--text);
 }
 .word-popup-phonetic {
@@ -746,4 +803,134 @@ button {
   background: rgba(30, 100, 200, 0.85);
   color: #fff;
   pointer-events: none;
+}
+
+@media (pointer: coarse) {
+  /* 审计清单：触控目标至少 44px，桌面端保持原样 */
+  button,
+  .book-card,
+  .library-toolbar :is(input, select, button),
+  .reader-toolbar :is(input, select, button),
+  .context-menu button,
+  .outline-item,
+  .account-close,
+  .word-popup-speak,
+  .word-popup-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .account-trigger,
+  .btn,
+  .context-menu button,
+  .outline-item {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .book-card {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 700px) and (pointer: coarse) {
+  /* 审计清单 CSS Top 5 #1：书库工具栏改为两行，标题/账号与搜索/排序/添加分层布局 */
+  .library-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 16px;
+  }
+
+  .library-toolbar-main,
+  .library-toolbar-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .library-toolbar-main {
+    justify-content: space-between;
+  }
+
+  .library-toolbar-actions {
+    gap: 8px;
+  }
+
+  .app-title {
+    margin-right: 0;
+  }
+
+  .account-trigger {
+    max-width: min(52vw, 220px);
+  }
+
+  .search-box {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .sort-select {
+    flex: 1 1 0;
+  }
+
+  .library-toolbar-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  /* 审计清单 CSS Top 5 #2：阅读器工具栏允许换行，并隐藏缩放百分比避免横向溢出 */
+  .reader-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .reader-title {
+    order: 3;
+    flex: 1 0 100%;
+    white-space: normal;
+    line-height: 1.4;
+  }
+
+  .toolbar-group {
+    flex-wrap: wrap;
+  }
+
+  .zoom-label {
+    display: none;
+  }
+
+  .page-input {
+    width: 60px;
+  }
+
+  /* 审计清单 CSS Top 5 #4：目录侧栏在窄屏收缩为覆盖式面板，宽度不超过 80vw */
+  .reader-body {
+    position: relative;
+  }
+
+  .outline-panel {
+    position: fixed;
+    top: calc(var(--safe-top) + 60px);
+    left: var(--safe-left);
+    bottom: var(--safe-bottom);
+    width: min(260px, 80vw);
+    max-width: 80vw;
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.18);
+    z-index: 20;
+  }
+
+  /* 审计清单 CSS Top 5 #5：页面舞台缩小边距并保持 max-content + 横向滚动 */
+  .page-stage {
+    padding: 8px;
+    min-width: max-content;
+  }
+
+  .page-wrap {
+    flex: 0 0 auto;
+  }
+
+  .page-container {
+    overflow: auto;
+  }
 }
