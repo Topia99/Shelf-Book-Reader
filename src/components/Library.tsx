@@ -15,6 +15,7 @@ import {
   type SyncStatus,
 } from "../api";
 import { isPasswordError, openPdf, renderCoverPng } from "../pdf";
+import { isTouchDevice } from "../platform";
 import AccountPanel from "./AccountPanel";
 import BookCover from "./BookCover";
 
@@ -235,6 +236,11 @@ export default function Library({ onOpenBook }: Props) {
     }
   }
 
+  function openTouchMenu(book: Book, anchor: HTMLElement) {
+    const rect = anchor.getBoundingClientRect();
+    setCtxMenu({ x: rect.right, y: rect.bottom, book });
+  }
+
   return (
     <div className={"library" + (dragOver ? " drag-over" : "")}>
       <header className="library-toolbar">
@@ -292,14 +298,28 @@ export default function Library({ onOpenBook }: Props) {
             <div
               key={book.id}
               className="book-card"
+              onClick={() => {
+                if (isTouchDevice) tryOpenBook(book);
+              }}
               onDoubleClick={() => tryOpenBook(book)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setCtxMenu({ x: e.clientX, y: e.clientY, book });
               }}
-              title={`${book.title}（双击打开）`}
+              title={isTouchDevice ? `${book.title}（点按打开）` : `${book.title}（双击打开）`}
             >
               <BookCover book={book} />
+              <button
+                className="book-card-menu"
+                type="button"
+                aria-label={`管理《${book.title}》`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openTouchMenu(book, e.currentTarget);
+                }}
+              >
+                ⋯
+              </button>
               {book.cloud_state === "remote" && <span className="cloud-badge">云端</span>}
               <div className="book-title">{book.title}</div>
               <div className="book-progress">{progressText(book)}</div>
