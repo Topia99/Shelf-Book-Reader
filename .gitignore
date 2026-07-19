@@ -6,3 +6,4 @@ src-tauri/gen/schemas/
 .claude/settings.local.json
 .DS_Store
 src-tauri/gen/apple/assets/
+.xcode-derived-data/
