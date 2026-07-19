@@ -4,8 +4,8 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-12
-**当前阶段**：阶段 4 全速推进——iOS 模拟器已跑通（P4-1 ✅）、移动布局完成（P4-5 ✅）、触屏交互分派中（P4-4）；M2 双端联调书目同步已被用户实证，进度互通待验
+**最后更新**：2026-07-13
+**当前阶段**：阶段 4 全速推进——iOS 阅读器壳层改造 P4-UI-1~4 全部完成（模拟器实拍验收）；剩余：P4-9 内存压测、P4-10 TestFlight 流水线、桌面端人工回归清单（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 ⏳｜M3 TestFlight 可分享 ⏳｜M4 商店上线 ⏳
 
 ---
@@ -84,10 +84,10 @@
 | P4-7 | 生命周期持久化 | 🚫 | P4-1, P3-6 |
 | P4-8 | dict.db 首启拷贝 | 🔄 | 结构验证或可免做（dict.db 已随 bundle，Resource 解析 iOS 可用）；待模拟器实测查词后关闭 |
 | P4-9 | 内存压测（峰值 <600MB） | 🚫 | P4-3, P4-4 |
-| P4-UI-1 | iOS 壳层：结构拆分（controller/stage/双壳） | ⏳ | 用户派 Codex；验收标准见 docs/IOSUI_验收标准.md |
-| P4-UI-2 | iOS 壳层：平台路由（isIos 含 iPad 判定） | 🚫 | P4-UI-1 |
-| P4-UI-3 | iOS 壳层：顶部 pill/页码 badge/沉浸显隐 | 🚫 | P4-UI-2 |
-| P4-UI-4 | iOS 壳层：底部缩略图 strip（内存预算硬约束） | 🚫 | P4-UI-3 |
+| P4-UI-1 | iOS 壳层：结构拆分（controller/stage/双壳） | ✅ | Codex 拆分 + 主控验收；tsc 通过；macOS 启动冒烟零错误（完整桌面回归清单留用户过） |
+| P4-UI-2 | iOS 壳层：平台路由（isIos 含 iPad 判定） | ✅ | 修订 2 判定实现正确（含 iPad 伪装 UA）；iPhone 模拟器实跑命中 iOS 壳、macOS 命中桌面壳 |
+| P4-UI-3 | iOS 壳层：顶部 pill/页码 badge/沉浸显隐 | ✅ | 模拟器实拍：双 pill/badge/fit-width/浅灰舞台全达标；主控修复 stage 顶距被尾部触屏规则覆盖的层叠 bug（提高特异性） |
+| P4-UI-4 | iOS 壳层：底部缩略图 strip（内存预算硬约束） | ✅ | 主控实现：±5 页窗口/近处优先补齐/150px 上限/JPEG dataURL 化即销毁 canvas/24 张 LRU/空闲启动+翻页代际作废；模拟器实拍 5 页缩略图全渲染、当前页赭色描边（4.4 大文件压测并入 P4-9） |
 | P4-10 | TestFlight 流水线 | 🚫 | P4-1, H-1 |
 | P4-11 | TestFlight 公测（M3 里程碑） | 🚫 | P4-10 |
 
@@ -124,7 +124,15 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-13（P4-UI 收口，主控接管）**：应用户要求停用 Codex，主控接管 iOS 壳层改造。验收 Codex 的 Phase 1~3：结构拆分/平台路由/壳层 UI 全部合格。主控完成 Phase 4 缩略图 strip（修订 3 内存条款全数落实）。过程中修复三个问题：① Xcode 升级致 iOS 模拟器构建缓存指向 clang 16 旧路径（清缓存重建）；② main.tsx 真机调试期的全局错误兜底过于激进——任意游离异步错误（如 pdf.js Transport destroyed 良性竞态）会整页接管灭屏，改为仅首帧前接管 + 良性错误白名单；③ iOS 舞台顶距被文件尾部触屏媒体查询的 .page-stage 覆盖导致书页顶进刘海（提高特异性修复）。iPhone 模拟器实拍验收通过；tsc 零错误；macOS 启动冒烟零错误。
+
 - **2026-07-13（真机 + iOS UI 计划）**：用户真机联调修复 5 个 bug（Vite 局域网 HMR、Xcode 脚本沙箱、file:// URL 导入、Team 签名残留、devicectl 安装链路，详见 fixedbug.md），主控本地复验 clippy/40 单测/tsc 全绿。iOS 真机（iPhone 14 Pro）已可运行。审核用户的 iOS 阅读器壳层改造计划（IOSUI_design.md）：方案通过，四处硬性修订（范围收窄至已有能力、iPad UA 伪装判定、缩略图内存预算、共享核心行为清单）写入 docs/IOSUI_验收标准.md；执行由用户直接分派 Codex，按验收标准逐条自查交付（看板挂 P4-UI-1~4）。
+
+- **2026-07-13（P4-UI-1）**：按 iOS UI 验收标准启动 Phase 1 纯重构：新增 `src/components/reader/usePdfReaderController.ts`、`ReaderPageStage.tsx`、`ReaderDesktopShell.tsx`，把原 `Reader.tsx` 缩成密码/错误回退 + 壳层路由。当前仅做结构拆分，不改 CSS 与现有 DOM 语义；使用 bundled Node 运行 TypeScript 编译检查通过。剩余待验：桌面端人工回归清单与改造前后截图对比。
+
+- **2026-07-13（P4-UI-2）**：完成平台路由代码：`src/platform.ts` 新增 `isIos`，按 `iPhone|iPad|iPod || (Macintosh && maxTouchPoints > 1)` 识别 iPadOS 伪装 UA；新增 `src/components/reader/ReaderIosShell.tsx` 作为独立 iOS 壳入口，当前先透明复用 `ReaderDesktopShell`，把视觉改动继续留在 Phase 3。前端 `tsc --noEmit` 与 `vite build` 均通过。剩余待验：iOS 模拟器进阅读页命中 `ReaderIosShell`、macOS 命中 `ReaderDesktopShell`。
+
+- **2026-07-13（P4-UI-3）**：按 `IOSUI_design.md` 与 `docs/IOSUI_验收标准.md` 实装 iOS 阅读器新壳：`ReaderIosShell` 改为独立悬浮式布局，左 pill（返回/目录）+ 右 pill（适宽/整页），页码 badge 独立浮层，页面中央点击复用现有手势隐藏工具栏，舞台背景改柔和浅灰；`ReaderPageStage` 增加可注入命名空间 class，所有新增样式都收在 `.reader-ios-*` 下；iOS 默认缩放收口为 `fit-width`。前端 `tsc --noEmit` 与 `vite build` 全通过。剩余待验：模拟器截图、横竖屏旋转、取词/目录/进度保存实操。
 
 - **2026-07-13（UI 重设计）**：应用户要求主控完成「极简白」全面改版（参照 Apple Books）：首页只留书——大标题 + ＋/⋯ 两枚小圆钮，搜索（按需展开行）/排序（菜单打勾）/账号登录全部收进 ⋯ 菜单；书卡去标题只留封面 + 元信息行（进度% + 云图标 + ⋯）；全局改纯白主调 + 系统灰控件，赭色降级为点缀（选中态/CTA/同步指示）；保留 Shelf 签名元素（书脊高光、衬线空状态标题与词头、书架插画）。iPhone 模拟器截屏验收通过；tsc 零错误。
 

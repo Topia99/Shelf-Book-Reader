@@ -156,18 +156,28 @@ export default function Library({ onOpenBook }: Props) {
 
   // 拖拽 PDF 入库
   useEffect(() => {
-    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === "enter" || event.payload.type === "over") {
-        setDragOver(true);
-      } else if (event.payload.type === "drop") {
-        setDragOver(false);
-        importPaths(event.payload.paths);
-      } else {
-        setDragOver(false);
-      }
-    });
+    if (isTouchDevice) {
+      return;
+    }
+
+    let unlistenPromise: Promise<() => void> | null = null;
+    try {
+      unlistenPromise = getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          setDragOver(true);
+        } else if (event.payload.type === "drop") {
+          setDragOver(false);
+          importPaths(event.payload.paths);
+        } else {
+          setDragOver(false);
+        }
+      });
+    } catch {
+      return;
+    }
+
     return () => {
-      unlisten.then((fn) => fn());
+      unlistenPromise?.then((fn) => fn()).catch(() => {});
     };
   }, [importPaths]);
 

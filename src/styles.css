@@ -1092,6 +1092,334 @@ button {
 }
 
 /* ============================================================
+   iOS Reader Shell（Phase 3）
+   仅作用于 ReaderIosShell，不污染桌面阅读器
+   ============================================================ */
+
+.reader-ios-shell {
+  --reader-ios-top-space: calc(var(--safe-top) + 94px);
+  /* 底距为缩略图胶片留位（胶片高约 88px） */
+  --reader-ios-bottom-space: calc(var(--safe-bottom) + 112px);
+  position: relative;
+  isolation: isolate;
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.98), rgba(245, 245, 247, 0.92) 38%, rgba(239, 239, 243, 0.96) 100%);
+}
+
+.reader-ios-shell-hidden {
+  --reader-ios-top-space: calc(var(--safe-top) + 16px);
+  --reader-ios-bottom-space: calc(var(--safe-bottom) + 20px);
+}
+
+.reader-ios-body {
+  height: 100%;
+  position: relative;
+}
+
+.reader-ios-page-container {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(241, 241, 244, 0.98)),
+    #f2f2f5;
+}
+
+.reader-ios-shell .reader-ios-page-stage {
+  align-items: flex-start;
+  padding:
+    var(--reader-ios-top-space)
+    18px
+    var(--reader-ios-bottom-space)
+    18px;
+  gap: 12px;
+  transition: padding 220ms ease;
+}
+
+.reader-ios-page-stage .page-wrap {
+  flex: 0 0 auto;
+}
+
+.reader-ios-page-stage canvas {
+  border-radius: 4px;
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.09),
+    0 4px 10px rgba(0, 0, 0, 0.06);
+}
+
+.reader-ios-chrome {
+  /* 全屏透传层：自身不吃事件，顶部 pill 与底部胶片各自恢复 pointer-events */
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.reader-ios-toolbar {
+  position: absolute;
+  top: calc(var(--safe-top) + 12px);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  pointer-events: auto;
+  transition:
+    transform 220ms ease,
+    opacity 220ms ease;
+}
+
+.reader-ios-toolbar-left {
+  left: calc(var(--safe-left) + 14px);
+}
+
+.reader-ios-toolbar-right {
+  right: calc(var(--safe-right) + 14px);
+}
+
+.reader-ios-shell-hidden .reader-ios-toolbar {
+  opacity: 0;
+  transform: translateY(-18px);
+  pointer-events: none;
+}
+
+.reader-ios-pill-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    transform 100ms ease;
+}
+
+.reader-ios-pill-button svg {
+  width: 22px;
+  height: 22px;
+}
+
+.reader-ios-pill-button:hover:not(:disabled) {
+  background: rgba(29, 29, 31, 0.06);
+}
+
+.reader-ios-pill-button:active:not(:disabled) {
+  background: rgba(29, 29, 31, 0.1);
+  transform: translateY(0.5px);
+}
+
+.reader-ios-pill-button:disabled {
+  opacity: 0.36;
+  cursor: default;
+}
+
+.reader-ios-pill-button.active {
+  background: rgba(180, 83, 39, 0.14);
+  color: var(--accent);
+}
+
+.reader-ios-pill-label {
+  min-width: 64px;
+  padding: 0 16px;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.reader-ios-badge {
+  position: absolute;
+  top: calc(var(--safe-top) + 78px);
+  right: calc(var(--safe-right) + 16px);
+  z-index: 38;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  color: rgba(29, 29, 31, 0.55);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+  pointer-events: none;
+}
+
+.reader-ios-badge.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reader-ios-badge-separator {
+  opacity: 0.45;
+}
+
+.reader-ios-outline-panel {
+  position: fixed;
+  top: calc(var(--safe-top) + 70px);
+  left: calc(var(--safe-left) + 14px);
+  bottom: calc(var(--safe-bottom) + 18px);
+  width: min(290px, calc(100vw - 28px - var(--safe-left) - var(--safe-right)));
+  padding: 12px 10px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 22px 44px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  z-index: 36;
+}
+
+.reader-ios-outline-panel .outline-item {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+
+.reader-ios-loading-hint {
+  color: rgba(29, 29, 31, 0.52);
+}
+
+.reader-ios-toast {
+  bottom: calc(var(--safe-bottom) + 120px);
+}
+
+/* 底部缩略页胶片（随 chrome 显隐，验收 4.5） */
+.reader-ios-strip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 12px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(94vw, 640px);
+  overflow-x: auto;
+  padding: 9px 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  pointer-events: auto;
+  scrollbar-width: none;
+  transition:
+    transform 220ms ease,
+    opacity 220ms ease;
+}
+.reader-ios-strip::-webkit-scrollbar {
+  display: none;
+}
+.reader-ios-shell-hidden .reader-ios-strip {
+  opacity: 0;
+  transform: translateX(-50%) translateY(20px);
+  pointer-events: none;
+}
+
+.reader-ios-strip-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+.reader-ios-strip-item img,
+.reader-ios-strip-placeholder {
+  display: block;
+  width: 42px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  background: var(--bg-subtle);
+}
+/* 当前页：赭色描边高亮（验收 4.1） */
+.reader-ios-strip-item.current img,
+.reader-ios-strip-item.current .reader-ios-strip-placeholder {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.reader-ios-strip-num {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.reader-ios-strip-item.current .reader-ios-strip-num {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+@media (max-width: 700px) and (pointer: coarse) {
+  .reader-ios-toolbar {
+    top: calc(var(--safe-top) + 10px);
+  }
+
+  .reader-ios-toolbar-left {
+    left: calc(var(--safe-left) + 12px);
+  }
+
+  .reader-ios-toolbar-right {
+    right: calc(var(--safe-right) + 12px);
+  }
+
+  .reader-ios-pill-label {
+    min-width: 58px;
+    font-size: 15px;
+    padding: 0 14px;
+  }
+
+  .reader-ios-badge {
+    top: calc(var(--safe-top) + 74px);
+    right: calc(var(--safe-right) + 12px);
+    padding: 9px 12px;
+  }
+
+  .reader-ios-outline-panel {
+    top: calc(var(--safe-top) + 66px);
+    left: calc(var(--safe-left) + 12px);
+    bottom: calc(var(--safe-bottom) + 14px);
+  }
+
+  .reader-ios-shell .reader-ios-page-stage {
+    padding:
+      var(--reader-ios-top-space)
+      14px
+      var(--reader-ios-bottom-space)
+      14px;
+  }
+}
+
+/* ============================================================
    触屏与窄屏（功能性样式，行为与旧版一致）
    ============================================================ */
 

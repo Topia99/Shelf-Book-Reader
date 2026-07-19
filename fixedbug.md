@@ -40,3 +40,11 @@
   - `tauri ios run` 在 export 尾阶段偶发失败，导致命令退出，但 App 本体已经构建成功。
 - 修复
   - 保留构建产物，直接使用 Xcode 产出的 `.app` 通过 `devicectl` 安装到真机，绕过导出尾阶段问题。
+
+### 6. iOS 独立安装包首屏白屏
+
+- Bug
+  - iOS 真机和模拟器安装独立包后，首页白屏；根因是书库页在首屏执行了桌面专用的拖拽监听。
+- 修复
+  - 修改 [src/components/Library.tsx](/Users/jasonzeng/Developer/shelf-book-reader/src/components/Library.tsx)，在触屏/iOS 环境跳过拖拽监听，并对 `onDragDropEvent` 做安全兜底。
+  - 修改 [src/main.tsx](/Users/jasonzeng/Developer/shelf-book-reader/src/main.tsx)，增加启动异常兜底显示，避免后续再出现无信息白屏。
