@@ -1,6 +1,7 @@
 # Shelf 全平台进度看板（progress.md）
 
 > 全局唯一进度事实来源。每完成一项任务即时更新本文件。
+> **新会话接手先读 [PROJECT.md](PROJECT.md)（项目主文档，单文件即可接手）。**
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
