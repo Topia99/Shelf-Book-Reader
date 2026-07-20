@@ -124,6 +124,8 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-19**：真机安装链路 CLI 全程实测跑通并写入 [docs/真机安装测试步骤.md](docs/真机安装测试步骤.md)：`tauri ios build --export-method debugging` 产 IPA → `devicectl install` → 远程 launch 成功（iPhone 17 Pro Max，Shelf 0.2.2）。文档含一次性准备、三步日常安装、热调试模式、冒烟清单与 7 个实测过的故障排查项。
+
 - **2026-07-13（P4-UI 收口，主控接管）**：应用户要求停用 Codex，主控接管 iOS 壳层改造。验收 Codex 的 Phase 1~3：结构拆分/平台路由/壳层 UI 全部合格。主控完成 Phase 4 缩略图 strip（修订 3 内存条款全数落实）。过程中修复三个问题：① Xcode 升级致 iOS 模拟器构建缓存指向 clang 16 旧路径（清缓存重建）；② main.tsx 真机调试期的全局错误兜底过于激进——任意游离异步错误（如 pdf.js Transport destroyed 良性竞态）会整页接管灭屏，改为仅首帧前接管 + 良性错误白名单；③ iOS 舞台顶距被文件尾部触屏媒体查询的 .page-stage 覆盖导致书页顶进刘海（提高特异性修复）。iPhone 模拟器实拍验收通过；tsc 零错误；macOS 启动冒烟零错误。
 
 - **2026-07-13（真机 + iOS UI 计划）**：用户真机联调修复 5 个 bug（Vite 局域网 HMR、Xcode 脚本沙箱、file:// URL 导入、Team 签名残留、devicectl 安装链路，详见 fixedbug.md），主控本地复验 clippy/40 单测/tsc 全绿。iOS 真机（iPhone 14 Pro）已可运行。审核用户的 iOS 阅读器壳层改造计划（IOSUI_design.md）：方案通过，四处硬性修订（范围收窄至已有能力、iPad UA 伪装判定、缩略图内存预算、共享核心行为清单）写入 docs/IOSUI_验收标准.md；执行由用户直接分派 Codex，按验收标准逐条自查交付（看板挂 P4-UI-1~4）。
