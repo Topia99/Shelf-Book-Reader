@@ -32,6 +32,7 @@ export default function ReaderPageStage({ controller, classNames }: Props) {
     outline,
     page,
     showOutline,
+    stageRef,
     text1Ref,
     text2Ref,
     toast,
@@ -58,7 +59,7 @@ export default function ReaderPageStage({ controller, classNames }: Props) {
         onPointerUp={finishTouchPointer}
         onPointerCancel={handleTouchPointerCancel}
       >
-        <div className={cx("page-stage", classNames?.stage)}>
+        <div className={cx("page-stage", classNames?.stage)} ref={stageRef}>
           <div className="page-wrap">
             <canvas ref={canvas1Ref} />
             <div className="textLayer" lang="en" ref={text1Ref} />

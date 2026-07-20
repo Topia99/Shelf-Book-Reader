@@ -8,7 +8,7 @@ import {
 } from "react";
 import { saveCover, setTotalPages, updateProgress, type Book } from "../../api";
 import { cleanWord, localDictSource, type LookupResult } from "../../dict";
-import { isModKey, isTouchDevice } from "../../platform";
+import { isIos, isModKey, isTouchDevice } from "../../platform";
 import { isPasswordError, openPdf, pdfjs, renderCoverPng, type PDFDocumentProxy } from "../../pdf";
 import type { PopupAnchor } from "../WordPopup";
 
@@ -74,9 +74,10 @@ export function usePdfReaderController({
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [popup, setPopup] = useState<{ result: LookupResult; anchor: PopupAnchor } | null>(null);
   const [toast, setToast] = useState("");
-  const [toolbarHidden, setToolbarHidden] = useState(false);
+  const [toolbarHidden, setToolbarHidden] = useState(isIos);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PDFDocumentProxy | null>(null);
   const canvas1Ref = useRef<HTMLCanvasElement>(null);
   const canvas2Ref = useRef<HTMLCanvasElement>(null);
@@ -84,6 +85,8 @@ export function usePdfReaderController({
   const text2Ref = useRef<HTMLDivElement>(null);
   const wrap2Ref = useRef<HTMLDivElement>(null);
   const lastScaleRef = useRef(1);
+  /** 当前已提交布局所用的 scale；缩放锚点补偿据此换算（null = 首次渲染前） */
+  const appliedScaleRef = useRef<number | null>(null);
   const gestureStartScaleRef = useRef(1);
   const pageRef = useRef(1);
   const lastFlipAtRef = useRef(0);
@@ -155,6 +158,10 @@ export function usePdfReaderController({
   useEffect(() => {
     setZoom(defaultZoom);
   }, [book.id, defaultZoom]);
+
+  useEffect(() => {
+    setToolbarHidden(isIos);
+  }, [book.id]);
 
   useEffect(() => {
     pageRef.current = page;
@@ -501,11 +508,16 @@ export function usePdfReaderController({
       if (cancelled) return;
 
       const el = containerRef.current;
-      if (!el) return;
-      const padding = 24;
-      const gap = 8;
-      const cw = el.clientWidth - padding * 2 - (twoPage ? gap : 0);
-      const ch = el.clientHeight - padding * 2;
+      const stageEl = stageRef.current;
+      if (!el || !stageEl) return;
+      const stageStyle = window.getComputedStyle(stageEl);
+      const paddingLeft = parseFloat(stageStyle.paddingLeft) || 24;
+      const paddingRight = parseFloat(stageStyle.paddingRight) || 24;
+      const paddingTop = parseFloat(stageStyle.paddingTop) || 24;
+      const paddingBottom = parseFloat(stageStyle.paddingBottom) || 24;
+      const gap = parseFloat(stageStyle.columnGap || stageStyle.gap) || 8;
+      const cw = Math.max(1, el.clientWidth - paddingLeft - paddingRight - (twoPage ? gap : 0));
+      const ch = Math.max(1, el.clientHeight - paddingTop - paddingBottom);
       const base = proxies[0].getViewport({ scale: 1 });
       const perW = twoPage ? cw / 2 : cw;
 
@@ -516,6 +528,17 @@ export function usePdfReaderController({
       scale = clamp(scale, 0.1, 8);
       lastScaleRef.current = scale;
       setDisplayScale(scale);
+
+      // 缩放锚点：换算出当前视口中心对应的内容坐标（按旧 scale 归一化），
+      // 新布局生效后回填 scroll，让缩放围绕屏幕中心而不是左上角（真机捏合体验）
+      const prevScale = appliedScaleRef.current;
+      const anchor =
+        prevScale !== null && Math.abs(prevScale - scale) > 1e-4
+          ? {
+              cx: (el.scrollLeft + el.clientWidth / 2) / prevScale,
+              cy: (el.scrollTop + el.clientHeight / 2) / prevScale,
+            }
+          : null;
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const MAX_CANVAS_PIXELS = 16_777_216;
@@ -540,8 +563,19 @@ export function usePdfReaderController({
         const vp = proxies[i].getViewport({ scale: renderScale });
         canvas.width = Math.floor(vp.width);
         canvas.height = Math.floor(vp.height);
-        canvas.style.width = `${Math.floor(vpLayout.width)}px`;
-        canvas.style.height = `${Math.floor(vpLayout.height)}px`;
+        canvas.style.width = `${vpLayout.width}px`;
+        canvas.style.height = `${vpLayout.height}px`;
+        if (i === 0) {
+          appliedScaleRef.current = scale;
+          if (anchor) {
+            // 布局提交后按新 scale 回填滚动位置，保持视口中心不漂移
+            requestAnimationFrame(() => {
+              if (cancelled) return;
+              el.scrollLeft = anchor.cx * scale - el.clientWidth / 2;
+              el.scrollTop = anchor.cy * scale - el.clientHeight / 2;
+            });
+          }
+        }
         const task = proxies[i].render({
           canvasContext: canvas.getContext("2d")!,
           viewport: vp,
@@ -555,8 +589,8 @@ export function usePdfReaderController({
         if (cancelled) return;
         const vpText = proxies[i].getViewport({ scale });
         textDiv.replaceChildren();
-        textDiv.style.width = `${Math.floor(vpLayout.width)}px`;
-        textDiv.style.height = `${Math.floor(vpLayout.height)}px`;
+        textDiv.style.width = `${vpLayout.width}px`;
+        textDiv.style.height = `${vpLayout.height}px`;
         textDiv.style.setProperty("--scale-factor", String(scale));
         const textLayer = new pdfjs.TextLayer({
           textContentSource: proxies[i].streamTextContent(),
@@ -619,6 +653,7 @@ export function usePdfReaderController({
     setTwoPage,
     setZoom,
     showOutline,
+    stageRef,
     submitPageInput,
     text1Ref,
     text2Ref,

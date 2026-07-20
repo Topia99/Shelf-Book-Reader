@@ -15,6 +15,57 @@ interface Props {
   onRefreshStatus: () => Promise<void>;
 }
 
+function getErrorMessage(error: unknown, mode: "sign_in" | "sign_up" | "general" = "general") {
+  const raw = String(error ?? "").trim();
+  const normalized = raw.toLowerCase();
+
+  if (
+    normalized.includes("invalid login credentials") ||
+    normalized.includes("invalid_credentials") ||
+    normalized.includes("email not confirmed") ||
+    normalized.includes("unauthorized")
+  ) {
+    return mode === "sign_in" ? "邮箱或密码错误" : "登录已失效，请重新登录";
+  }
+
+  if (
+    normalized.includes("user already registered") ||
+    normalized.includes("already registered") ||
+    normalized.includes("email_exists")
+  ) {
+    return "该邮箱已注册，请直接登录";
+  }
+
+  if (
+    normalized.includes("password should be at least") ||
+    normalized.includes("password must be at least") ||
+    normalized.includes("weak_password")
+  ) {
+    return "密码至少需要 6 位";
+  }
+
+  if (normalized.includes("invalid email")) {
+    return "邮箱格式不正确";
+  }
+
+  if (normalized.includes("quota exceeded")) {
+    return "云端存储空间已满，请清理后再试";
+  }
+
+  if (normalized.includes("network error")) {
+    return "网络连接失败，请稍后重试";
+  }
+
+  if (!raw) {
+    return "操作失败，请稍后重试";
+  }
+
+  return raw
+    .replace(/^error[:\s]*/i, "")
+    .replace(/^failed to .*?:\s*/i, "")
+    .trim() || "操作失败，请稍后重试";
+}
+
 export default function AccountPanel({ open, status, onClose, onRefreshStatus }: Props) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -67,7 +118,7 @@ export default function AccountPanel({ open, status, onClose, onRefreshStatus }:
       setPassword("");
       await onRefreshStatus();
     } catch (e) {
-      setError(String(e));
+      setError(getErrorMessage(e, mode));
     } finally {
       setSubmitting(false);
     }
@@ -80,7 +131,7 @@ export default function AccountPanel({ open, status, onClose, onRefreshStatus }:
       await syncNow();
       await onRefreshStatus();
     } catch (e) {
-      setError(String(e));
+      setError(getErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
@@ -94,7 +145,7 @@ export default function AccountPanel({ open, status, onClose, onRefreshStatus }:
       await onRefreshStatus();
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(getErrorMessage(e));
     } finally {
       setSubmitting(false);
     }
@@ -110,7 +161,7 @@ export default function AccountPanel({ open, status, onClose, onRefreshStatus }:
       await onRefreshStatus();
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(getErrorMessage(e));
     } finally {
       setSubmitting(false);
     }

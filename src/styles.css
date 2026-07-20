@@ -307,14 +307,20 @@ button {
 }
 
 /* ---------- 书架网格：只有书 ---------- */
+/* 网格采用确定性尺寸：固定列宽 + 显式封面高度。
+   WKWebView 的 grid 自动行高对 aspect-ratio/百分比 padding/替换元素比例
+   三种「高度随宽度」的写法全都算错（iPhone 真机实测封面溢出或塌陷），
+   写死高度后行高计算无歧义，三端一致 */
 .book-grid {
   flex: 1;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 30px 24px;
+  grid-template-columns: repeat(auto-fill, 168px);
+  grid-auto-rows: max-content;
+  gap: 28px 22px;
   padding: 18px 24px 44px;
   align-content: start;
+  align-items: start;
 }
 
 .book-card {
@@ -332,9 +338,12 @@ button {
 }
 
 /* 书封：干净的浅描边 + 轻投影；左缘书脊高光是 Shelf 的小签名 */
+/* 高度由内部 .cover-ratio 占位图的固有比例（300×420）撑起：
+   aspect-ratio 与百分比 padding 在 WKWebView 的 grid 自动行高里均不可靠
+   （iPhone 真机实测封面溢出盖住下行/塌陷成文字高度），替换元素比例最稳 */
 .cover {
   position: relative;
-  aspect-ratio: 3 / 4.2;
+  height: 235px; /* 168 × 1.4，与列宽保持 3:4.2 */
   border-radius: 6px;
   overflow: hidden;
   border: 0.5px solid rgba(0, 0, 0, 0.1);
@@ -342,9 +351,6 @@ button {
     0 2px 6px rgba(0, 0, 0, 0.12),
     0 0.5px 1.5px rgba(0, 0, 0, 0.08);
   background: var(--bg-subtle);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   transition:
     transform 160ms ease,
     box-shadow 160ms ease;
@@ -357,12 +363,19 @@ button {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.4), rgba(0, 0, 0, 0.05));
   pointer-events: none;
 }
-.cover img {
+.cover-img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 .cover-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 14px;
 }
 .cover-fallback span {
@@ -1097,9 +1110,9 @@ button {
    ============================================================ */
 
 .reader-ios-shell {
-  --reader-ios-top-space: calc(var(--safe-top) + 94px);
-  /* 底距为缩略图胶片留位（胶片高约 88px） */
-  --reader-ios-bottom-space: calc(var(--safe-bottom) + 112px);
+  --reader-ios-top-space: 0px;
+  --reader-ios-side-space: 0px;
+  --reader-ios-bottom-space: 0px;
   position: relative;
   isolation: isolate;
   height: 100%;
@@ -1109,8 +1122,9 @@ button {
 }
 
 .reader-ios-shell-hidden {
-  --reader-ios-top-space: calc(var(--safe-top) + 16px);
-  --reader-ios-bottom-space: calc(var(--safe-bottom) + 20px);
+  --reader-ios-top-space: 0px;
+  --reader-ios-side-space: 0px;
+  --reader-ios-bottom-space: 0px;
 }
 
 .reader-ios-body {
@@ -1125,14 +1139,16 @@ button {
 }
 
 .reader-ios-shell .reader-ios-page-stage {
-  align-items: flex-start;
+  /* 页面尺寸在两种模式下保持固定：左右始终贴边，上下始终给悬浮图标留位，
+     点击页面只切换 chrome 显隐，不再挤压或放大 PDF 模块 */
+  min-width: 100%;
+  align-items: center;
   padding:
     var(--reader-ios-top-space)
-    18px
+    var(--reader-ios-side-space)
     var(--reader-ios-bottom-space)
-    18px;
+    var(--reader-ios-side-space);
   gap: 12px;
-  transition: padding 220ms ease;
 }
 
 .reader-ios-page-stage .page-wrap {
@@ -1413,9 +1429,9 @@ button {
   .reader-ios-shell .reader-ios-page-stage {
     padding:
       var(--reader-ios-top-space)
-      14px
+      var(--reader-ios-side-space)
       var(--reader-ios-bottom-space)
-      14px;
+      var(--reader-ios-side-space);
   }
 }
 
@@ -1471,9 +1487,14 @@ button {
   }
 
   .book-grid {
-    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    /* 手机：固定两列；封面高 = 列宽 × 1.4，列宽 = (100vw − 左右 18×2 − 列距 16)/2 */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 24px 16px;
     padding: 12px 18px 36px;
+  }
+
+  .cover {
+    height: calc((50vw - 26px) * 1.4);
   }
 
   /* 审计清单 CSS Top 5 #2：阅读器工具栏允许换行，并隐藏缩放百分比避免横向溢出 */
@@ -1533,3 +1554,4 @@ button {
     overflow: auto;
   }
 }
+
