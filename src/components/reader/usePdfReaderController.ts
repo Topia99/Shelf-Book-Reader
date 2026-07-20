@@ -511,11 +511,18 @@ export function usePdfReaderController({
       const stageEl = stageRef.current;
       if (!el || !stageEl) return;
       const stageStyle = window.getComputedStyle(stageEl);
-      const paddingLeft = parseFloat(stageStyle.paddingLeft) || 24;
-      const paddingRight = parseFloat(stageStyle.paddingRight) || 24;
-      const paddingTop = parseFloat(stageStyle.paddingTop) || 24;
-      const paddingBottom = parseFloat(stageStyle.paddingBottom) || 24;
-      const gap = parseFloat(stageStyle.columnGap || stageStyle.gap) || 8;
+      // 仅在解析失败（NaN）时回退，真实的 0 内边距必须保留：
+      // iOS 舞台 side/top space 为 0px，若用 `|| 24` 会把 0 当 falsy 误减 24px，
+      // 导致 fit-width 少铺满两侧（书页缩小、左右留灰边）。
+      const px = (value: string, fallback: number) => {
+        const n = parseFloat(value);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const paddingLeft = px(stageStyle.paddingLeft, 24);
+      const paddingRight = px(stageStyle.paddingRight, 24);
+      const paddingTop = px(stageStyle.paddingTop, 24);
+      const paddingBottom = px(stageStyle.paddingBottom, 24);
+      const gap = px(stageStyle.columnGap || stageStyle.gap, 8);
       const cw = Math.max(1, el.clientWidth - paddingLeft - paddingRight - (twoPage ? gap : 0));
       const ch = Math.max(1, el.clientHeight - paddingTop - paddingBottom);
       const base = proxies[0].getViewport({ scale: 1 });

@@ -125,6 +125,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-20（iOS 阅读页满宽修复）**：修复 iOS 阅读页书页左右留灰边、默认未铺满宽度的 bug（用户反馈）。根因：`usePdfReaderController` 计算 fit-width 时用 `parseFloat(stageStyle.paddingLeft) || 24` 读舞台内边距，而 iOS 舞台 side-space 为 **0px**，`0 || 24` 因 0 是 falsy 误取回退值 24 → 左右各误减 24px → fit-width 少铺满、书页缩小成带灰边的卡片。修复=改用 NaN 判定的 `px()` 助手（`Number.isFinite(n) ? n : fallback`），真实 0 被保留。模拟器屏上测量探针实证：修复前 `cW=393 canvasCSS=345px scale=0.580`（左右各 24px 灰边）→ 修复后 `canvasCSS=393px scale=0.661`（书页满宽铺满、文字延伸到两侧边缘）。桌面端舞台 padding 为真实 24px、gap 10px，`px()` 返回值与原 `||` 一致，行为零变化。tsc / vite build 通过。待 CI 三 job 全绿。
 - **2026-07-20**：真机 UI 修复提交 CI 全绿（[run 29765495460](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29765495460)）。
 - **2026-07-20**：真机 UI 两大 bug 修复收口，用户确认 iOS App 初步通过测试 ✅。① 书库封面粘连：根因为 WKWebView 的 grid 自动行高对「高度随宽度」的三种写法（aspect-ratio/百分比 padding/替换元素固有比例）全部计算错误（行高被錯定为 168px 而封面 239px 溢出盖住下行）——通过应用内测量探针实证定位，修复 = `grid-auto-rows: max-content` + 确定性尺寸（桌面固定 168px 列 + 235px 封面高，手机两列 + calc(50vw) 封面高）；② 阅读器缩放锚点：捏合缩放围绕屏幕中心（视口中心坐标按新旧 scale 换算回填 scroll），舞台尺寸从计算样式实读（不再硬编码 padding），iOS 壳默认沉浸（工具栏初始隐藏）；③ AccountPanel 错误文案中文化映射。主控代码审查一轮：无阻塞缺陷，两处小项记录在案（注册模式 unauthorized 文案不贴切、chrome 隐藏时按钮键盘可聚焦），README 个人绝对路径已泛化；tsc/vite build/clippy/40 单测全绿。新增 tools/seed-ios-test-book.sh（模拟器注数据调试脚本）。
 
