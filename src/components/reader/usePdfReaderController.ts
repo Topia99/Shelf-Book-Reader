@@ -176,9 +176,20 @@ export function usePdfReaderController({
   }, [book.id]);
 
   useEffect(() => {
+    // iOS/移动端 App 进后台时 beforeunload 不触发（页面不卸载，只是挂起），
+    // 会丢掉翻页防抖里未落库的最新页码，且系统随时可能杀后台进程。
+    // visibilitychange(hidden) 是移动端进后台最可靠的信号，pagehide 作额外保险；
+    // 立即 flush（同步落库——本地是事实来源不会丢，updateProgress 内部再发 SyncNow 尽力 push）。
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushProgress();
+    };
     window.addEventListener("beforeunload", flushProgress);
+    window.addEventListener("pagehide", flushProgress);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.removeEventListener("beforeunload", flushProgress);
+      window.removeEventListener("pagehide", flushProgress);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       clearLongPressTimer();
       flushProgress();
     };
