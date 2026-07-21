@@ -89,7 +89,7 @@
 | P4-UI-2 | iOS 壳层：平台路由（isIos 含 iPad 判定） | ✅ | 修订 2 判定实现正确（含 iPad 伪装 UA）；iPhone 模拟器实跑命中 iOS 壳、macOS 命中桌面壳 |
 | P4-UI-3 | iOS 壳层：顶部 pill/页码 badge/沉浸显隐 | ✅ | 模拟器实拍：双 pill/badge/fit-width/浅灰舞台全达标；主控修复 stage 顶距被尾部触屏规则覆盖的层叠 bug（提高特异性） |
 | P4-UI-4 | iOS 壳层：底部缩略图 strip（内存预算硬约束） | ✅ | 主控实现：±5 页窗口/近处优先补齐/150px 上限/JPEG dataURL 化即销毁 canvas/24 张 LRU/空闲启动+翻页代际作废；模拟器实拍 5 页缩略图全渲染、当前页赭色描边（4.4 大文件压测并入 P4-9） |
-| P4-10 | TestFlight 流水线 | 🚫 | P4-1, H-1 |
+| P4-10 | TestFlight 流水线 | 🚫 | P4-1, H-1；**2026-07-21 暂缓**：Apple Developer/ASC 账号创建中，等就绪再启动 |
 | P4-11 | TestFlight 公测（M3 里程碑） | 🚫 | P4-10 |
 
 ## 阶段 5：书籍文件同步
@@ -125,6 +125,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-21**：用户确认 iOS 阅读页满宽修复**真机测试通过** ✅。P4-10 TestFlight 流水线因 Apple Developer/ASC 账号仍在创建中**暂缓**，优先推进其他不依赖外部的开发任务。
 - **2026-07-20（iOS 阅读页满宽修复）**：修复 iOS 阅读页书页左右留灰边、默认未铺满宽度的 bug（用户反馈）。根因：`usePdfReaderController` 计算 fit-width 时用 `parseFloat(stageStyle.paddingLeft) || 24` 读舞台内边距，而 iOS 舞台 side-space 为 **0px**，`0 || 24` 因 0 是 falsy 误取回退值 24 → 左右各误减 24px → fit-width 少铺满、书页缩小成带灰边的卡片。修复=改用 NaN 判定的 `px()` 助手（`Number.isFinite(n) ? n : fallback`），真实 0 被保留。模拟器屏上测量探针实证：修复前 `cW=393 canvasCSS=345px scale=0.580`（左右各 24px 灰边）→ 修复后 `canvasCSS=393px scale=0.661`（书页满宽铺满、文字延伸到两侧边缘）。桌面端舞台 padding 为真实 24px、gap 10px，`px()` 返回值与原 `||` 一致，行为零变化。tsc / vite build 通过；CI 三 job 全绿（[run 29788505798](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29788505798)）。
 - **2026-07-20**：真机 UI 修复提交 CI 全绿（[run 29765495460](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29765495460)）。
 - **2026-07-20**：真机 UI 两大 bug 修复收口，用户确认 iOS App 初步通过测试 ✅。① 书库封面粘连：根因为 WKWebView 的 grid 自动行高对「高度随宽度」的三种写法（aspect-ratio/百分比 padding/替换元素固有比例）全部计算错误（行高被錯定为 168px 而封面 239px 溢出盖住下行）——通过应用内测量探针实证定位，修复 = `grid-auto-rows: max-content` + 确定性尺寸（桌面固定 168px 列 + 235px 封面高，手机两列 + calc(50vw) 封面高）；② 阅读器缩放锚点：捏合缩放围绕屏幕中心（视口中心坐标按新旧 scale 换算回填 scroll），舞台尺寸从计算样式实读（不再硬编码 padding），iOS 壳默认沉浸（工具栏初始隐藏）；③ AccountPanel 错误文案中文化映射。主控代码审查一轮：无阻塞缺陷，两处小项记录在案（注册模式 unauthorized 文案不贴切、chrome 隐藏时按钮键盘可聚焦），README 个人绝对路径已泛化；tsc/vite build/clippy/40 单测全绿。新增 tools/seed-ios-test-book.sh（模拟器注数据调试脚本）。
