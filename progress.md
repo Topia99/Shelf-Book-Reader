@@ -81,7 +81,7 @@
 | P4-3 | 渲染分辨率预算（dpr≤2 + 单 canvas 1600 万像素预算） | ✅ | 布局/位图尺寸解耦，超预算按 √ 比例降渲染 scale；tsc 通过（真机内存压测仍归 P4-9） |
 | P4-4 | 触屏手势（滑动/捏合/长按取词）+ 审计阻塞项（轻触打开、操作菜单） | ✅ | 点击翻页区/横滑翻页/长按取词（caretRangeFromPoint）/工具栏点击显隐/触屏单击开书/⋯管理菜单；双重守卫（isTouchDevice+pointerType）桌面零变化；tsc 通过，模拟器人工走查待用户 |
 | P4-5 | 移动端布局（安全区/44pt/响应式）+ 审计 CSS Top5 | ✅ | 审计 5 项全修 + 安全区 + 44pt + :active 反馈；iPhone 模拟器截屏实证两行工具栏生效；遗留：目录抽屉无点击关闭遮罩（CSS-only 边界） |
-| P4-6 | 文件导入（选择器 + 分享到 Shelf） | 🚫 | P4-1 |
+| P4-6 | 文件导入（选择器 + 分享到 Shelf） | 🔄 | 应用内选择器已有；**分享到 Shelf / 用 Shelf 打开**核心链路完成（fileAssociations + RunEvent::Opened + 前端 importPaths 复用），Info.plist 文档类型生成实证、模拟器启动无回归、静态检查全绿；**待用户真机确认**从微信/文件 App 分享 PDF 到 Shelf 能入库 |
 | P4-7 | 生命周期持久化 | 🚫 | P4-1, P3-6 |
 | P4-8 | dict.db 首启拷贝 | 🔄 | 结构验证或可免做（dict.db 已随 bundle，Resource 解析 iOS 可用）；待模拟器实测查词后关闭 |
 | P4-9 | 内存压测（峰值 <600MB） | 🚫 | P4-3, P4-4 |
@@ -125,6 +125,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-21（P4-6 分享/打开导入链路）**：实现「分享到 Shelf / 用 Shelf 打开」PDF 导入。方案（查 Tauri 2 官方文档定路径）：① `tauri.conf.json` 加 `bundle.fileAssociations`（ext=pdf/role=Viewer）→ 自动生成 iOS `CFBundleDocumentTypes`（LSItemContentTypes=com.adobe.pdf），实证生成正确；未声明 open-in-place → 系统把分享文件拷进 app Inbox（沙箱内，无需 security-scoped resource）。② lib.rs：`run()` 由 `.run(ctx)` 改为 `.build(ctx).run(|app,event|)` 捕获 `RunEvent::Opened`（macOS/iOS/Android 统一），只缓存 URL + emit `files-opened`，**不碰 DB 锁**；新增 `OpenedUrls` 缓存 + `take_opened_urls` 命令（冷启动兜底，前端就绪前事件投递不到）。Windows/Linux cfg 块编译不到，`let _ = (&app,&event)` 抑制未用参数告警（§4.2 坑6 镜像）。③ 前端：入库**全复用现有 `importPaths`**（复制/SHA-256 查重/封面/刷新，`resolve_input_path` 已支持 file://）——Library mount 取冷启动缓存 + listen `files-opened`。验证：tsc/clippy/40 单测/vite build 全绿；模拟器重建实证 Info.plist 文档类型 + 启动无回归。**真实分享 sheet 投递依赖系统交互，模拟器无 GUI 自动化，待用户真机确认**。
 - **2026-07-21**：用户确认 iOS 阅读页满宽修复**真机测试通过** ✅。P4-10 TestFlight 流水线因 Apple Developer/ASC 账号仍在创建中**暂缓**，优先推进其他不依赖外部的开发任务。
 - **2026-07-20（iOS 阅读页满宽修复）**：修复 iOS 阅读页书页左右留灰边、默认未铺满宽度的 bug（用户反馈）。根因：`usePdfReaderController` 计算 fit-width 时用 `parseFloat(stageStyle.paddingLeft) || 24` 读舞台内边距，而 iOS 舞台 side-space 为 **0px**，`0 || 24` 因 0 是 falsy 误取回退值 24 → 左右各误减 24px → fit-width 少铺满、书页缩小成带灰边的卡片。修复=改用 NaN 判定的 `px()` 助手（`Number.isFinite(n) ? n : fallback`），真实 0 被保留。模拟器屏上测量探针实证：修复前 `cW=393 canvasCSS=345px scale=0.580`（左右各 24px 灰边）→ 修复后 `canvasCSS=393px scale=0.661`（书页满宽铺满、文字延伸到两侧边缘）。桌面端舞台 padding 为真实 24px、gap 10px，`px()` 返回值与原 `||` 一致，行为零变化。tsc / vite build 通过；CI 三 job 全绿（[run 29788505798](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29788505798)）。
 - **2026-07-20**：真机 UI 修复提交 CI 全绿（[run 29765495460](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29765495460)）。

@@ -10,6 +10,7 @@ import {
   saveCover,
   setTotalPages,
   syncStatus,
+  takeOpenedUrls,
   type Book,
   type SortKey,
   type SyncStatus,
@@ -153,6 +154,26 @@ export default function Library({ onOpenBook }: Props) {
     },
     [reload, postProcessBook]
   );
+
+  // 「用 Shelf 打开 / 分享到 Shelf」PDF 导入：
+  // 冷启动兜底（mount 取缓存）+ 运行时监听 files-opened 事件，统一走 importPaths。
+  useEffect(() => {
+    let cancelled = false;
+    takeOpenedUrls()
+      .then((urls) => {
+        if (!cancelled && urls.length > 0) importPaths(urls);
+      })
+      .catch(() => {});
+
+    const unlistenPromise = listen<string[]>("files-opened", (event) => {
+      if (!cancelled && event.payload.length > 0) importPaths(event.payload);
+    });
+
+    return () => {
+      cancelled = true;
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [importPaths]);
 
   // 拖拽 PDF 入库
   useEffect(() => {

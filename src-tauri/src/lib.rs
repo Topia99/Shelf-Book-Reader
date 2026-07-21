@@ -12,7 +12,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use url::Url;
 
 struct AppState {
@@ -159,6 +159,18 @@ fn update_progress_in_db(db: &Connection, id: i64, page: i64) -> Result<(), Stri
     )
     .map_err(|e| format!("保存进度失败：{e}"))?;
     Ok(())
+}
+
+/// 冷启动时通过「用 Shelf 打开 / 分享到 Shelf」传入的文件 URL 缓存。
+/// RunEvent::Opened 在前端就绪前触发，事件投递不到，故先落缓存，
+/// 由前端挂载时 take_opened_urls 取走（并清空），运行时再走 files-opened 事件。
+struct OpenedUrls(Mutex<Vec<String>>);
+
+/// 取走并清空冷启动缓存的待导入文件 URL（file:// 字符串）。
+#[tauri::command]
+fn take_opened_urls(state: State<OpenedUrls>) -> Vec<String> {
+    let mut guard = state.0.lock().unwrap();
+    std::mem::take(&mut *guard)
 }
 
 #[tauri::command]
@@ -1060,6 +1072,7 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(OpenedUrls(Mutex::new(Vec::new())))
         .setup(|app| {
             let base = resolve_base_dir(app)?;
             let books_dir = base.join("books");
@@ -1099,8 +1112,24 @@ pub fn run() {
             sync_sign_out,
             sync_delete_account,
             sync_status,
-            sync_now
+            sync_now,
+            take_opened_urls
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // 「用 Shelf 打开 / 分享到 Shelf」PDF：桌面（macOS）与移动端统一走 RunEvent::Opened。
+            // 此处只缓存 URL 并转发给前端，入库复用前端既有 importPaths 链路（复制/查重/封面/刷新）。
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                let list: Vec<String> = urls.iter().map(|u| u.to_string()).collect();
+                if let Some(state) = app.try_state::<OpenedUrls>() {
+                    state.0.lock().unwrap().extend(list.clone());
+                }
+                // 前端已就绪时即时导入；未就绪则由 take_opened_urls 兜底
+                let _ = app.emit("files-opened", list);
+            }
+            // Windows/Linux 上 cfg 块编译不到，借用一次抑制未使用参数告警（-D warnings）
+            let _ = (&app, &event);
+        });
 }

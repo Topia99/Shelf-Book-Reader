@@ -37,6 +37,14 @@
       "app",
       "dmg"
     ],
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "mimeType": "application/pdf",
+        "description": "PDF 文档",
+        "role": "Viewer"
+      }
+    ],
     "icon": [
       "icons/icon.ico",
       "icons/icon.png",

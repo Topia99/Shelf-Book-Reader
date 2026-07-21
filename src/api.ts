@@ -37,6 +37,9 @@ export const listBooks = (sort: SortKey, query: string) =>
 export const addBooks = (paths: string[]) =>
   invoke<AddResult[]>("add_books", { paths });
 
+/** 取走并清空冷启动时「用 Shelf 打开」缓存的文件 URL（file://）。 */
+export const takeOpenedUrls = () => invoke<string[]>("take_opened_urls");
+
 export const removeBook = (id: number) => invoke<void>("remove_book", { id });
 
 export const updateProgress = (id: number, page: number) =>
