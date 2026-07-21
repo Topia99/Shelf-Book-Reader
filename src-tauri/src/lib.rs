@@ -12,7 +12,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 use url::Url;
 
 struct AppState {
@@ -1122,6 +1122,7 @@ pub fn run() {
             // 此处只缓存 URL 并转发给前端，入库复用前端既有 importPaths 链路（复制/查重/封面/刷新）。
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
             if let tauri::RunEvent::Opened { urls } = &event {
+                use tauri::Emitter;
                 let list: Vec<String> = urls.iter().map(|u| u.to_string()).collect();
                 if let Some(state) = app.try_state::<OpenedUrls>() {
                     state.0.lock().unwrap().extend(list.clone());
