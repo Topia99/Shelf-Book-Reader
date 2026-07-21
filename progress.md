@@ -6,7 +6,7 @@
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
 **最后更新**：2026-07-21
-**当前阶段**：iOS App 真机通过 ✅；P4-6 分享/打开导入 ✅、P4-7 生命周期持久化 ✅、P4-9 内存压测模拟器初筛通过（583MB<600MB，待真机复核）🔄；剩余：P4-8 dict.db 真机查词实测、P4-10 TestFlight（Apple 账号创建中暂缓）、桌面端人工回归清单（用户）
+**当前阶段**：阶段 4 功能基本收尾——iOS 真机通过 ✅、P4-6 分享/打开导入 ✅、P4-7 生命周期持久化 ✅、P4-8 离线查词 ✅、P4-9 内存压测模拟器初筛通过（583MB<600MB，待真机复核）🔄；剩余：P4-10 TestFlight（Apple 账号创建中暂缓）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ⏳（真机直装已通，流水线待建）｜M4 商店上线 ⏳
 
 ---
@@ -83,7 +83,7 @@
 | P4-5 | 移动端布局（安全区/44pt/响应式）+ 审计 CSS Top5 | ✅ | 审计 5 项全修 + 安全区 + 44pt + :active 反馈；iPhone 模拟器截屏实证两行工具栏生效；遗留：目录抽屉无点击关闭遮罩（CSS-only 边界） |
 | P4-6 | 文件导入（选择器 + 分享到 Shelf） | ✅ | 应用内选择器 + **分享到 Shelf / 用 Shelf 打开**（fileAssociations 自动生成 CFBundleDocumentTypes + RunEvent::Opened 缓存转发 + 前端 importPaths 复用入库）；2026-07-21 用户真机确认分享 PDF 到 Shelf 入库通过 ✅ |
 | P4-7 | 生命周期持久化 | ✅ | 进后台立即 flush 进度：阅读页加 `visibilitychange(hidden)` + `pagehide` 监听→`flushProgress`（同步落库 + updateProgress 内发 SyncNow 尽力 push）。补 iOS/移动端 `beforeunload` 不触发导致防抖内翻页丢失的缺口；模拟器探针实证 WKWebView 进后台确触发 visibilitychange（hidden 0→1）。桌面切窗口也 flush，正向无害 |
-| P4-8 | dict.db 首启拷贝 | 🔄 | 结构验证或可免做（dict.db 已随 bundle，Resource 解析 iOS 可用）；待模拟器实测查词后关闭 |
+| P4-8 | dict.db 首启拷贝 | ✅ | 免拷贝：dict.db 随 bundle（Shelf.app/assets/resources/dict.db 24MB），`open_dict` 经 BaseDirectory::Resource 解析。模拟器实测 `lookup_word` 四词全命中（book/reading 精确、ran→run 词形还原、better 后缀），iOS 查词链路端到端可用；长按取词手势 P4-4 已真机验证 |
 | P4-9 | 内存压测（峰值 <600MB） | 🔄 | 模拟器初筛**通过**：302MB/122 页扫描版 PDF、自动翻 60 页+反复缩放，Shelf 相关进程(app+WebContent+GPU+Net) phys_footprint 峰值 **583MB<600MB**、无终止、压测后回落 468MB 无泄漏（D9 预算生效）。主导项=pdf.js 持有的 ~300MB 完整文件缓冲（WebContent）。**余量薄(~17MB)+模拟器≠真机，待真机 Instruments 权威复核**。工具：tools/gen-scan-pdf.py |
 | P4-UI-1 | iOS 壳层：结构拆分（controller/stage/双壳） | ✅ | Codex 拆分 + 主控验收；tsc 通过；macOS 启动冒烟零错误（完整桌面回归清单留用户过） |
 | P4-UI-2 | iOS 壳层：平台路由（isIos 含 iPad 判定） | ✅ | 修订 2 判定实现正确（含 iPad 伪装 UA）；iPhone 模拟器实跑命中 iOS 壳、macOS 命中桌面壳 |
@@ -125,6 +125,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-21（P4-8 dict.db 查词实测）**：验证 iOS 离线词典可用性。dict.db（24MB）随 bundle 打包在 `Shelf.app/assets/resources/dict.db`，`open_dict` 经 `BaseDirectory::Resource` 解析（无需首启拷贝到用户目录）。临时前端探针在 iOS 调 `lookup_word` 查四词全部命中：book→「n. 书，书籍」、reading→「n. 阅读，知识」精确命中；**ran→run 词形还原**（forms 表反查）；better→「a. 较好的」后缀/词形处理。证明 iOS 上 dict.db 解析+三级查询链路端到端工作。长按取词手势（caretRangeFromPoint）P4-4 已真机验证，故 P4-8 直接关闭 ✅。无源码改动（纯验证，dict.db 免拷贝方案成立）。
 - **2026-07-21（P4-9 内存压测·模拟器初筛）**：生成 302MB/122 页扫描版 PDF（tools/gen-scan-pdf.py：A4@300dpi 位图+噪点纹理+段落黑条，无文字层）注入模拟器，临时 HMR 驱动自动翻 60 页+反复缩放（fit-width/fit-page/放大循环），`footprint` 每秒采样 Shelf 相关全进程 phys_footprint 之和（app 壳+WebContent+GPU+Networking，过滤宿主 WebKit 进程）。**结果：峰值 583MB<600MB ✓、全程无终止 ✓、压测后回落至 468MB 无泄漏 ✓（D9 渲染预算把 canvas/缩略图位图控住，内存不失控）**。关键洞察：峰值主导项是 pdf.js 加载时持有的 ~300MB 完整文件缓冲（在独立 WebContent 进程，非 Shelf 壳进程——壳进程恒 46MB）。踩坑：① WKWebView 网页内容跑在独立 WebContent 进程，测 app 壳 PID 只见 46MB 假象，须测 WebContent；② `pgrep -f WebKit` 会误抓宿主 Mac 浏览器进程（曾算出 6.4GB 假总和），须按 comm 路径含 CoreSimulator 过滤。**余量仅 ~17MB 且模拟器共享 Mac 大内存不代表 iOS jetsam 硬限，标 🔄 待真机 Instruments 权威复核**（真机跑法见 tools/gen-scan-pdf.py 头注）。无源码改动（压测通过，D9 预算无需调整）；CI 三 job 全绿（[run 29866431975](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29866431975)）。
 - **2026-07-21（P4-7 生命周期持久化）**：修复 iOS 阅读中进后台丢进度的缺口。根因：`beforeunload` 在移动端 WKWebView 不触发（App 挂起而非页面卸载），翻页 1000ms 防抖内未落库的最新页码在进后台/被杀时丢失。修复=阅读控制器加 `visibilitychange(hidden)` + `pagehide` 监听 → 立即 `flushProgress`（同步 updateProgress 落本地库——本地是事实来源不会丢；updateProgress 内部再发 SyncNow 尽力 push，来不及则下次启动补推）。模拟器探针实证 WKWebView 进后台确触发 visibilitychange（启动 Safari 令 Shelf 进后台，hidden 计数 0→1）——P4-7 唯一平台特定前提已确定性验证，flush 逻辑复用已证路径。桌面端切窗口/最小化亦 flush，正向无害。tsc/vite build 通过；CI 三 job 全绿（[run 29863451747](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29863451747)）。P4-6 亦经用户真机确认分享导入通过，标 ✅。
 - **2026-07-21（P4-6 分享/打开导入链路）**：实现「分享到 Shelf / 用 Shelf 打开」PDF 导入。方案（查 Tauri 2 官方文档定路径）：① `tauri.conf.json` 加 `bundle.fileAssociations`（ext=pdf/role=Viewer）→ 自动生成 iOS `CFBundleDocumentTypes`（LSItemContentTypes=com.adobe.pdf），实证生成正确；未声明 open-in-place → 系统把分享文件拷进 app Inbox（沙箱内，无需 security-scoped resource）。② lib.rs：`run()` 由 `.run(ctx)` 改为 `.build(ctx).run(|app,event|)` 捕获 `RunEvent::Opened`（macOS/iOS/Android 统一），只缓存 URL + emit `files-opened`，**不碰 DB 锁**；新增 `OpenedUrls` 缓存 + `take_opened_urls` 命令（冷启动兜底，前端就绪前事件投递不到）。Windows/Linux cfg 块编译不到，`let _ = (&app,&event)` 抑制未用参数告警（§4.2 坑6 镜像）。③ 前端：入库**全复用现有 `importPaths`**（复制/SHA-256 查重/封面/刷新，`resolve_input_path` 已支持 file://）——Library mount 取冷启动缓存 + listen `files-opened`。验证：tsc/clippy/40 单测/vite build 全绿；模拟器重建实证 Info.plist 文档类型 + 启动无回归。CI 首轮 Windows clippy 打回一次（`Emitter` import 只在 macOS/iOS/Android cfg 块用到、Windows 成未用 import——§4.2 坑6 镜像），移入 cfg 块内 `use` 后三 job 全绿（[run 29861665735](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29861665735)）。**真实分享 sheet 投递依赖系统交互，模拟器无 GUI 自动化，待用户真机确认**。
