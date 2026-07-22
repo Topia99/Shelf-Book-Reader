@@ -57,7 +57,7 @@ src/                          # React 前端（四端共享）
       ReaderIosShell.tsx         # iOS 壳（悬浮 pill/页码 badge/沉浸显隐）
       ReaderThumbnailStrip.tsx   # iOS 底部缩略图胶片（内存预算硬约束，见 §4.1-D8）
 src-tauri/
-  tauri.conf.json             # identifier com.shelf.reader；targets nsis/app/dmg；iOS developmentTeam AZ3MB6QPUV
+  tauri.conf.json             # identifier com.shelf.reader；targets nsis/app/dmg；iOS developmentTeam R59Q7NXAWD
   src/
     lib.rs                    # 书库 CRUD 命令、resolve_base_dir(Windows 数据迁移)、SQLite 迁移(user_version=2)
     sync.rs                   # SyncBackend trait + 云端模型（可插拔后端）
@@ -233,10 +233,10 @@ supabase db push / functions deploy <fn>    # 上云（已 login + link）
 | 仓库 | https://github.com/Topia99/Shelf-Book-Reader （本地 /Users/jasonzeng/Developer/shelf-book-reader，主分支 main 直推） |
 | Supabase | 项目 ref `dyhpapzyyuxlqpqupsfo`（us-east-1，用作 dev；prod 名额留上线前）；CLI 已 login+link；anon key 内嵌在 src-tauri/src/sync_runtime.rs |
 | Cloudflare R2 | bucket `shelf-book-storage`；凭证在 `.env.r2.local`（被 .gitignore 第 5 行 `*.local` 覆盖，含 R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET）；云端函数 secrets 已配 |
-| Apple | Team ID `AZ3MB6QPUV`（付费）；Xcode 26.x 已登录；开发证书已建；设备：iPhone 17 Pro Max（devicectl 可见）、iPhone 14 Pro、iPad Pro 11" |
+| Apple | **Team ID `R59Q7NXAWD`**（新付费账号，2026-07-22 起；旧 `AZ3MB6QPUV` 已弃用）；设备：iPhone 17 Pro Max、iPhone 14 Pro、iPad Pro 11"。**TestFlight 上传**：ASC API 密钥须 **Admin 角色**（App Manager 云端签名报权限错），凭证在 `.env.asc.local`(gitignored)，.p8 存 `~/appstoreconnect/private_keys/`（仓库外）；流水线 `tools/release-ios-testflight.sh`；App Store Connect App ID `6793296218` |
 | Edge Functions | sign-url、delete-account 已部署云端 |
 | 工具链 | rustup stable（~/.cargo）、node v24.14.0（nvm）、supabase CLI 2.x（brew）、CocoaPods、Docker Desktop（本地栈需手动启动）、codex-cli 0.144.1（已登录、当前停用） |
-| 未就绪 | gh CLI（未装，CI 日志拿不到）、Azure Trusted Signing（H-2）、域名（H-4）、App Store Connect API key（P4-10 需要） |
+| 未就绪 | gh CLI（未装，CI 日志拿不到）、Azure Trusted Signing（H-2）、域名（H-4）｜已就绪：App Store Connect API 密钥（Admin，P4-10 首次上传成功） |
 
 ### 4.4 常用命令速查
 
