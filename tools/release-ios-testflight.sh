@@ -24,9 +24,13 @@ export APPLE_API_KEY_PATH="${ASC_KEY_PATH}"
 
 [ -f "$ASC_KEY_PATH" ] || { echo ".p8 私钥不存在：$ASC_KEY_PATH" >&2; exit 1; }
 
+# build 号：单调递增整数。默认取「自 2020-01-01 起的分钟数」（约 7 位，天然递增、
+# 每次上传唯一、CI/本地统一），也可用 BUILD_NUMBER 环境变量覆盖（CI 传入）。
+BUILD_NUM="${BUILD_NUMBER:-$(( ($(date +%s) - 1577836800) / 60 ))}"
+
 do_build() {
-  echo "==> tauri ios build（App Store 导出，API 密钥自动签名）"
-  npm run tauri ios build -- --export-method app-store-connect --ci
+  echo "==> tauri ios build [App Store 导出 / API 自动签名 / build 号 ${BUILD_NUM}]"
+  npm run tauri ios build -- --export-method app-store-connect --ci --build-number "${BUILD_NUM}"
 }
 do_upload() {
   echo "==> fastlane 上传 TestFlight"
