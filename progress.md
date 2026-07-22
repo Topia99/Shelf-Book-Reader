@@ -5,9 +5,9 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-21
-**当前阶段**：阶段 4 功能基本收尾——iOS 真机通过 ✅、P4-6 分享/打开导入 ✅、P4-7 生命周期持久化 ✅、P4-8 离线查词 ✅、P4-9 内存压测模拟器初筛通过（583MB<600MB，待真机复核）🔄；剩余：P4-10 TestFlight（Apple 账号创建中暂缓）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
-**里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ⏳（真机直装已通，流水线待建）｜M4 商店上线 ⏳
+**最后更新**：2026-07-22
+**当前阶段**：阶段 4 收尾 + M3 逼近——iOS 真机通过 ✅、P4-6~8 ✅、P4-9 内存初筛通过（待真机复核）🔄、**P4-10 首次成功上传 TestFlight** ✅🔄（流水线通，待 GitHub Actions 迁移 + P4-11 邀测试员）；剩余：桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
+**里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 🔄（流水线打通、首个构建 0.2.2 已上传，待处理完成+邀测试员）｜M4 商店上线 ⏳
 
 ---
 
@@ -89,7 +89,7 @@
 | P4-UI-2 | iOS 壳层：平台路由（isIos 含 iPad 判定） | ✅ | 修订 2 判定实现正确（含 iPad 伪装 UA）；iPhone 模拟器实跑命中 iOS 壳、macOS 命中桌面壳 |
 | P4-UI-3 | iOS 壳层：顶部 pill/页码 badge/沉浸显隐 | ✅ | 模拟器实拍：双 pill/badge/fit-width/浅灰舞台全达标；主控修复 stage 顶距被尾部触屏规则覆盖的层叠 bug（提高特异性） |
 | P4-UI-4 | iOS 壳层：底部缩略图 strip（内存预算硬约束） | ✅ | 主控实现：±5 页窗口/近处优先补齐/150px 上限/JPEG dataURL 化即销毁 canvas/24 张 LRU/空闲启动+翻页代际作废；模拟器实拍 5 页缩略图全渲染、当前页赭色描边（4.4 大文件压测并入 P4-9） |
-| P4-10 | TestFlight 流水线 | 🚫 | P4-1, H-1；**2026-07-21 暂缓**：Apple Developer/ASC 账号创建中，等就绪再启动 |
+| P4-10 | TestFlight 流水线 | 🔄 | 本地流水线打通并**首次成功上传 TestFlight**（App 6793296218，build 0.2.2）：tauri ios build（app-store-connect 导出，ASC API 密钥自动签名）→ fastlane pilot 上传；凭证走 .env.asc.local(gitignored)。新 Apple 账号 Team=R59Q7NXAWD（旧 AZ3MB6QPUV 全量替换）。**关键坑**：xcodebuild 云端分发签名要求 API 密钥 **Admin** 角色（App Manager 报 Cloud signing permission error）。加 ITSAppUsesNonExemptEncryption=false 免加密合规询问。**待办**：build 号自增、迁 GitHub Actions（证书转 Secrets）、P4-11 邀请测试员 |
 | P4-11 | TestFlight 公测（M3 里程碑） | 🚫 | P4-10 |
 
 ## 阶段 5：书籍文件同步
@@ -125,6 +125,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-22（P4-10 TestFlight 首次上传成功）**：搭本地发布流水线并首次成功上传 TestFlight。新建脚手架：fastlane/{Appfile,Fastfile}（validate/beta lane，API 密钥认证）、tools/release-ios-testflight.sh（source .env.asc.local → tauri build 自动签名 → fastlane 上传）、.env.asc.local.example 模板、.gitignore 加忽略 *.p8。**新 Apple 账号 Team ID 变更 AZ3MB6QPUV→R59Q7NXAWD**，全量替换（tauri.conf.json + pbxproj）。踩坑串：① 上次 debugging 构建残留的 build/ExportOptions.plist 携旧 teamID 致导出用错 Team（删陈旧文件重生成）；② **xcodebuild 云端分发签名要求 ASC API 密钥 Admin 角色**——用户初建的 App Manager 报 `Cloud signing permission error / No profiles found`（查证 Apple 论坛确认），改用 Admin 密钥后 EXPORT SUCCEEDED；③ .p8 路径笔误（private_key→private_keys）修正；④ Homebrew fastlane 在 ruby 4.0 缺一批默认 gem（bigdecimal/digest-crc/nkf 等），批量补装；⑤ Fastfile IPA 相对路径受 cwd 影响，改 File.expand_path(__dir__)。产物 Shelf.ipa(17MB) 经用户确认后上传成功（App 6793296218，version/build 0.2.2）。加 Info.plist `ITSAppUsesNonExemptEncryption=false` 免后续加密合规询问（本次 0.2.2 可能仍需在 ASC 手动答一次）。**M3 里程碑逼近**。凭证（.p8/.env.asc.local）全程未入库。
 - **2026-07-21（P4-8 dict.db 查词实测）**：验证 iOS 离线词典可用性。dict.db（24MB）随 bundle 打包在 `Shelf.app/assets/resources/dict.db`，`open_dict` 经 `BaseDirectory::Resource` 解析（无需首启拷贝到用户目录）。临时前端探针在 iOS 调 `lookup_word` 查四词全部命中：book→「n. 书，书籍」、reading→「n. 阅读，知识」精确命中；**ran→run 词形还原**（forms 表反查）；better→「a. 较好的」后缀/词形处理。证明 iOS 上 dict.db 解析+三级查询链路端到端工作。长按取词手势（caretRangeFromPoint）P4-4 已真机验证，故 P4-8 直接关闭 ✅。无源码改动（纯验证，dict.db 免拷贝方案成立）。
 - **2026-07-21（P4-9 内存压测·模拟器初筛）**：生成 302MB/122 页扫描版 PDF（tools/gen-scan-pdf.py：A4@300dpi 位图+噪点纹理+段落黑条，无文字层）注入模拟器，临时 HMR 驱动自动翻 60 页+反复缩放（fit-width/fit-page/放大循环），`footprint` 每秒采样 Shelf 相关全进程 phys_footprint 之和（app 壳+WebContent+GPU+Networking，过滤宿主 WebKit 进程）。**结果：峰值 583MB<600MB ✓、全程无终止 ✓、压测后回落至 468MB 无泄漏 ✓（D9 渲染预算把 canvas/缩略图位图控住，内存不失控）**。关键洞察：峰值主导项是 pdf.js 加载时持有的 ~300MB 完整文件缓冲（在独立 WebContent 进程，非 Shelf 壳进程——壳进程恒 46MB）。踩坑：① WKWebView 网页内容跑在独立 WebContent 进程，测 app 壳 PID 只见 46MB 假象，须测 WebContent；② `pgrep -f WebKit` 会误抓宿主 Mac 浏览器进程（曾算出 6.4GB 假总和），须按 comm 路径含 CoreSimulator 过滤。**余量仅 ~17MB 且模拟器共享 Mac 大内存不代表 iOS jetsam 硬限，标 🔄 待真机 Instruments 权威复核**（真机跑法见 tools/gen-scan-pdf.py 头注）。无源码改动（压测通过，D9 预算无需调整）；CI 三 job 全绿（[run 29866431975](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29866431975)）。
 - **2026-07-21（P4-7 生命周期持久化）**：修复 iOS 阅读中进后台丢进度的缺口。根因：`beforeunload` 在移动端 WKWebView 不触发（App 挂起而非页面卸载），翻页 1000ms 防抖内未落库的最新页码在进后台/被杀时丢失。修复=阅读控制器加 `visibilitychange(hidden)` + `pagehide` 监听 → 立即 `flushProgress`（同步 updateProgress 落本地库——本地是事实来源不会丢；updateProgress 内部再发 SyncNow 尽力 push，来不及则下次启动补推）。模拟器探针实证 WKWebView 进后台确触发 visibilitychange（启动 Safari 令 Shelf 进后台，hidden 计数 0→1）——P4-7 唯一平台特定前提已确定性验证，flush 逻辑复用已证路径。桌面端切窗口/最小化亦 flush，正向无害。tsc/vite build 通过；CI 三 job 全绿（[run 29863451747](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/29863451747)）。P4-6 亦经用户真机确认分享导入通过，标 ✅。

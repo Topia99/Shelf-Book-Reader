@@ -1,0 +1,2 @@
+app_identifier(ENV.fetch("ASC_APP_IDENTIFIER", "com.shelf.reader"))
+# 凭证走 App Store Connect API 密钥（见 Fastfile），不用 apple_id 交互登录。

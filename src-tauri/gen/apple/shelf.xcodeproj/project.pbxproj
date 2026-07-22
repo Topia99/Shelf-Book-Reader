@@ -267,7 +267,7 @@
 				CODE_SIGN_ENTITLEMENTS = shelf_iOS/shelf_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "AZ3MB6QPUV";
+				DEVELOPMENT_TEAM = "R59Q7NXAWD";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
@@ -430,7 +430,7 @@
 				CODE_SIGN_ENTITLEMENTS = shelf_iOS/shelf_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "AZ3MB6QPUV";
+				DEVELOPMENT_TEAM = "R59Q7NXAWD";
 				ENABLE_BITCODE = NO;
 				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
 				FRAMEWORK_SEARCH_PATHS = (
