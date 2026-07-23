@@ -1,6 +1,6 @@
 [package]
 name = "shelf"
-version = "0.2.2"
+version = "0.3.0"
 description = "本地 PDF 书库阅读器"
 edition = "2021"
 

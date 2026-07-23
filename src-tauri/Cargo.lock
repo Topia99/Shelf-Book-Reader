@@ -3084,7 +3084,7 @@ dependencies = [
 
 [[package]]
 name = "shelf"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "keyring",
  "reqwest 0.12.28",

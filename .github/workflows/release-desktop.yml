@@ -1,0 +1,65 @@
+name: Release Desktop (Win + macOS)
+
+# 打 tag v*（或手动触发）→ 在 windows-latest 与 macos-latest 分别构建，
+# 桌面安装包（Windows NSIS .exe、macOS .dmg）自动发布到同一个 GitHub Release。
+# macOS 为 ad-hoc 签名（未公证）；iOS 由 release-ios.yml 另行上 TestFlight。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build & publish (${{ matrix.platform }})
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: ""
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build & upload to GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Shelf ${{ github.ref_name }}"
+          releaseBody: |
+            Shelf 全平台阅读器桌面版。详见 CHANGELOG。
+
+            **macOS**（Apple Silicon）：下载 `.dmg` → 拖入「应用程序」。首次打开若提示
+            「已损坏 / 无法验证开发者」（ad-hoc 签名、未公证），任选其一放行：
+            右键 App →「打开」；或终端 `xattr -cr /Applications/Shelf.app`；
+            或系统设置 → 隐私与安全性 →「仍要打开」。
+
+            **Windows** 10/11：下载 `.exe` 双击安装。SmartScreen 提示时「更多信息」→「仍要运行」。
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
