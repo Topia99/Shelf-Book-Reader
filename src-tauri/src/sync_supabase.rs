@@ -340,15 +340,13 @@ impl SyncBackend for SupabaseBackend {
 }
 
 impl SupabaseBackend {
-    /// 书籍文件在 R2 的对象键：{user_id}/books/{sha256}.pdf（内容寻址 + 用户前缀隔离，
-    /// 下载端凭自身 user_id + 书籍 hash 即可推导，无需在本地额外存键）。
+    /// 传给 sign-url 函数的对象键：books/<sha256>.pdf（内容寻址）。
+    /// 函数内部再自行加 {user_id}/ 前缀成完整 R2 键，实现用户隔离——
+    /// 所以这里**不能**带 user_id 前缀，否则正则校验失败返回 403。
     fn book_object_key(&self, sha256: &str) -> Result<String, SyncError> {
-        let user_id = self
-            .session
-            .as_ref()
-            .map(|s| s.user_id.clone())
-            .ok_or(SyncError::Unauthorized)?;
-        Ok(format!("{user_id}/books/{sha256}.pdf"))
+        // 仍要求已登录（apply_auth 也依赖会话）
+        self.session.as_ref().ok_or(SyncError::Unauthorized)?;
+        Ok(format!("books/{sha256}.pdf"))
     }
 
     /// 上传书籍文件本体：签发预签名 PUT → 直传 R2 → 回填云端 file_key/file_size。
@@ -898,6 +896,50 @@ mod tests {
         map_http_error, map_sign_url_error, rfc3339_to_unix_ms, unix_ms_to_rfc3339, SyncError,
     };
     use reqwest::StatusCode;
+
+    /// 真实 dev Supabase + R2 端到端往返（P5 文件同步验证）。默认忽略，手动跑：
+    /// SHELF_SUPABASE_URL=.. SHELF_SUPABASE_ANON_KEY=.. SHELF_TEST_EMAIL=.. SHELF_TEST_PASSWORD=.. \
+    ///   cargo test --manifest-path src-tauri/Cargo.toml real_r2_roundtrip -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn real_r2_roundtrip() {
+        use super::SupabaseBackend;
+        use crate::sync::{CloudBook, SyncBackend};
+
+        let url = std::env::var("SHELF_SUPABASE_URL").expect("SHELF_SUPABASE_URL");
+        let key = std::env::var("SHELF_SUPABASE_ANON_KEY").expect("SHELF_SUPABASE_ANON_KEY");
+        let email = std::env::var("SHELF_TEST_EMAIL").expect("SHELF_TEST_EMAIL");
+        let password = std::env::var("SHELF_TEST_PASSWORD").expect("SHELF_TEST_PASSWORD");
+
+        let mut backend = SupabaseBackend::new(url, key);
+        backend.sign_in(&email, &password).expect("登录失败");
+
+        let bytes = b"Shelf P5 end-to-end file-sync test payload".to_vec();
+        let hash = crate::sha256_of_bytes(&bytes);
+        let now = crate::now_ms();
+
+        // 云端书行需先存在，upload_book_file 才能 PATCH 回填 file_key
+        backend
+            .push_books(&[CloudBook {
+                sha256: hash.clone(),
+                title: "P5 测试书".into(),
+                author: None,
+                page_count: None,
+                file_size: bytes.len() as i64,
+                cover_key: None,
+                file_key: None,
+                updated_at: now,
+                deleted: false,
+            }])
+            .expect("push_books 失败");
+
+        backend.upload_book_file(&hash, &bytes).expect("upload 失败");
+        eprintln!("[test] 上传成功：hash={hash} {} 字节", bytes.len());
+
+        let got = backend.download_book_file(&hash).expect("download 失败");
+        assert_eq!(got, bytes, "下载字节应与上传一致");
+        eprintln!("[test] 下载校验通过：{} 字节，内容一致 ✓", got.len());
+    }
 
     #[test]
     fn unix_ms_to_rfc3339_handles_epoch_boundary_and_zero_padding() {
