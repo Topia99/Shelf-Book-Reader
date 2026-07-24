@@ -67,3 +67,7 @@ export const syncDeleteAccount = () => invoke<void>("sync_delete_account");
 export const syncStatus = () => invoke<SyncStatus>("sync_status");
 
 export const syncNow = () => invoke<void>("sync_now");
+
+/** 按需下载云端书籍文件本体（点开 remote 书时调用），完成后本机即有文件可打开 */
+export const syncDownloadBook = (hash: string) =>
+  invoke<void>("sync_download_book", { hash });

@@ -73,6 +73,41 @@ pub(crate) fn mark_synced(
     Ok(())
 }
 
+/// 待上传文件的候选：本机有文件、尚未上传到云（cloud_state='local'、未删除）。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct UploadCandidate {
+    pub hash: String,
+    /// 相对 base 的文件路径（如 books/<hash>.pdf），读取时由调用方拼绝对。
+    pub file_path: String,
+}
+
+/// 收集需要上传文件本体的本地书。元数据 push 之后调用，云端行已存在可回填 file_key。
+pub(crate) fn collect_uploadable(db: &Connection) -> rusqlite::Result<Vec<UploadCandidate>> {
+    let mut stmt = db.prepare(
+        "SELECT hash, file_path FROM books
+         WHERE cloud_state = 'local' AND deleted = 0
+         ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(UploadCandidate {
+                hash: r.get(0)?,
+                file_path: r.get(1)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// 更新单本书的 cloud_state（local | uploading | synced | remote）。
+pub(crate) fn set_cloud_state(db: &Connection, hash: &str, state: &str) -> rusqlite::Result<()> {
+    db.execute(
+        "UPDATE books SET cloud_state = ?2 WHERE hash = ?1",
+        params![hash, state],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn merge_remote_books(
     db: &Connection,
     rows: &[CloudBook],
@@ -329,6 +364,35 @@ mod tests {
             device_name: None,
             updated_at,
         }
+    }
+
+    #[test]
+    fn collect_uploadable_只返回_local_未删除的书() {
+        let db = memory_db();
+        insert_book_row(&db, "h1", "书一", 1, 100, 0, 0); // local，待上传
+        insert_book_row(&db, "h2", "书二", 1, 100, 0, 1); // local 但已删除，跳过
+        insert_book_row(&db, "h3", "书三", 1, 100, 0, 0);
+        set_cloud_state(&db, "h3", "synced").unwrap(); // 已同步，跳过
+        insert_book_row(&db, "h4", "书四", 1, 100, 0, 0);
+        set_cloud_state(&db, "h4", "remote").unwrap(); // 云端书，跳过
+
+        let items = collect_uploadable(&db).unwrap();
+        let hashes: Vec<&str> = items.iter().map(|c| c.hash.as_str()).collect();
+        assert_eq!(hashes, vec!["h1"]);
+        assert_eq!(items[0].file_path, "books/h1.pdf");
+    }
+
+    #[test]
+    fn set_cloud_state_更新指定书的状态() {
+        let db = memory_db();
+        insert_book_row(&db, "h1", "书一", 1, 100, 0, 0);
+        set_cloud_state(&db, "h1", "uploading").unwrap();
+        let state: String = db
+            .query_row("SELECT cloud_state FROM books WHERE hash='h1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(state, "uploading");
     }
 
     #[test]

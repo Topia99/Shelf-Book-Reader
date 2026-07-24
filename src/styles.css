@@ -415,6 +415,11 @@ button {
   height: 14px;
   color: var(--text-dim);
 }
+.meta-downloading {
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+}
 .meta-more {
   display: inline-flex;
   align-items: center;

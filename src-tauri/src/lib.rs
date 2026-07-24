@@ -98,6 +98,13 @@ fn sha256_of_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// 按字节计算 SHA-256（小写 hex），用于校验云端下载的文件内容与哈希一致。
+pub(crate) fn sha256_of_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
 fn resolve_input_path(path_str: &str) -> Result<PathBuf, String> {
     if let Ok(url) = Url::parse(path_str) {
         if url.scheme() == "file" {
@@ -417,6 +424,15 @@ fn sync_status(sync: State<sync_runtime::SyncHandle>) -> sync_runtime::SyncStatu
 #[tauri::command]
 fn sync_now(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
     sync.send(sync_runtime::SyncCommand::SyncNow)
+}
+
+/// 按需下载 remote 书文件本体（用户点开云端书时调用，最长等 180 秒）。
+#[tauri::command]
+fn sync_download_book(hash: String, sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
+    sync.request_with_timeout(
+        move |reply| sync_runtime::SyncCommand::DownloadBook { hash, reply },
+        180,
+    )
 }
 
 #[tauri::command]
@@ -1113,6 +1129,7 @@ pub fn run() {
             sync_delete_account,
             sync_status,
             sync_now,
+            sync_download_book,
             take_opened_urls
         ])
         .build(tauri::generate_context!())

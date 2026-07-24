@@ -7,7 +7,7 @@
 //! 触发模型：登录成功 / 显式 sync_now / 翻页（update_progress 后发 SyncNow）都会
 //! 安排一次防抖后的同步；无事件时每 5 分钟心跳一次；失败按 2^n 指数退避（上限 10 分钟）。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -61,6 +61,11 @@ pub(crate) enum SyncCommand {
     DeleteAccount {
         reply: Sender<Result<(), String>>,
     },
+    /// 按需下载云端书籍文件本体（用户点开 remote 书时触发）
+    DownloadBook {
+        hash: String,
+        reply: Sender<Result<(), String>>,
+    },
     /// 请求一次同步（防抖合并，可安全高频发送）
     SyncNow,
 }
@@ -95,10 +100,19 @@ impl SyncHandle {
         &self,
         make: impl FnOnce(Sender<Result<(), String>>) -> SyncCommand,
     ) -> Result<(), String> {
+        self.request_with_timeout(make, 30)
+    }
+
+    /// 同 request，但可指定超时（下载大文件用更长超时）。
+    pub(crate) fn request_with_timeout(
+        &self,
+        make: impl FnOnce(Sender<Result<(), String>>) -> SyncCommand,
+        timeout_secs: u64,
+    ) -> Result<(), String> {
         let (reply_tx, reply_rx) = channel();
         self.send(make(reply_tx))?;
         reply_rx
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(Duration::from_secs(timeout_secs))
             .map_err(|_| "同步引擎响应超时".to_string())?
     }
 
@@ -151,6 +165,12 @@ fn engine_loop(
         }
     };
     let _ = db.busy_timeout(Duration::from_secs(5));
+
+    // 文件路径存相对 base（books/<hash>.pdf），上传时拼回绝对；base = library.db 所在目录
+    let base_dir: PathBuf = db_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
 
     let (url, key) = supabase_config();
     let mut backend = SupabaseBackend::new(url, key);
@@ -268,6 +288,11 @@ fn engine_loop(
                 }
                 let _ = reply.send(result);
             }
+            Ok(SyncCommand::DownloadBook { hash, reply }) => {
+                let result =
+                    download_book(&db, &mut backend, &base_dir, &hash).map_err(|e| e.to_string());
+                let _ = reply.send(result);
+            }
             Ok(SyncCommand::SyncNow) => {
                 if status.lock().unwrap().signed_in {
                     // 防抖：合并 5 秒内的连发；且与上次成功同步至少间隔 30 秒
@@ -285,7 +310,7 @@ fn engine_loop(
                     continue;
                 }
                 update_status(&app, &status, |s| s.syncing = true);
-                match run_cycle(&db, &mut backend) {
+                match run_cycle(&db, &mut backend, &base_dir) {
                     Ok(()) => {
                         eprintln!("[sync] 同步周期完成");
                         failures = 0;
@@ -323,7 +348,14 @@ fn engine_loop(
 }
 
 /// 一轮完整同步：会话保鲜 → push 脏行 → 按游标分页 pull 合并。
-fn run_cycle(db: &Connection, backend: &mut SupabaseBackend) -> Result<(), SyncError> {
+/// 单次 PUT 上传的文件大小上限（MVP）。>100MB 暂不上传，留待 P5-1b 分片续传。
+const MAX_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
+
+fn run_cycle(
+    db: &Connection,
+    backend: &mut SupabaseBackend,
+    base_dir: &Path,
+) -> Result<(), SyncError> {
     let session = backend.session().ok_or(SyncError::Unauthorized)?;
     if session.expires_at - crate::now_ms() < REFRESH_MARGIN_MS {
         let fresh = backend.refresh()?;
@@ -356,6 +388,83 @@ fn run_cycle(db: &Connection, backend: &mut SupabaseBackend) -> Result<(), SyncE
             None => break,
         }
     }
+
+    // 文件上传放在元数据同步之后：即使上传失败也不影响书目/进度同步。
+    upload_pending_files(db, backend, base_dir)?;
+    Ok(())
+}
+
+/// 上传本机待传书的文件本体（cloud_state='local'）。元数据 push 后云端行已存在，
+/// 上传成功即回填 file_key 并置 synced。配额满时停止本轮并向上传播提示；
+/// 单本瞬时失败回退 local、下轮重试；>100MB 暂跳过（MVP 单次 PUT）。
+fn upload_pending_files(
+    db: &Connection,
+    backend: &SupabaseBackend,
+    base_dir: &Path,
+) -> Result<(), SyncError> {
+    let candidates = sync_engine::collect_uploadable(db).map_err(db_err)?;
+    for c in candidates {
+        let abs = base_dir.join(&c.file_path);
+        let Ok(meta) = std::fs::metadata(&abs) else {
+            continue; // 文件不在本机（异常态），跳过
+        };
+        if meta.len() > MAX_UPLOAD_BYTES {
+            continue; // 大文件 MVP 暂不传
+        }
+        let Ok(bytes) = std::fs::read(&abs) else {
+            continue;
+        };
+        sync_engine::set_cloud_state(db, &c.hash, "uploading").map_err(db_err)?;
+        match backend.upload_book_file(&c.hash, &bytes) {
+            Ok(()) => {
+                sync_engine::set_cloud_state(db, &c.hash, "synced").map_err(db_err)?;
+            }
+            Err(SyncError::QuotaExceeded) => {
+                sync_engine::set_cloud_state(db, &c.hash, "local").map_err(db_err)?;
+                return Err(SyncError::QuotaExceeded);
+            }
+            Err(_) => {
+                // 瞬时失败：回退 local，本轮跳过该书，下轮重试
+                sync_engine::set_cloud_state(db, &c.hash, "local").map_err(db_err)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 按需下载 remote 书文件：会话保鲜 → 预签名 GET → 校验 SHA-256 → 写入书库 → 置 synced。
+fn download_book(
+    db: &Connection,
+    backend: &mut SupabaseBackend,
+    base_dir: &Path,
+    hash: &str,
+) -> Result<(), SyncError> {
+    let session = backend.session().ok_or(SyncError::Unauthorized)?;
+    if session.expires_at - crate::now_ms() < REFRESH_MARGIN_MS {
+        let fresh = backend.refresh()?;
+        let _ = token_store::save_session(&fresh);
+    }
+
+    let rel: String = db
+        .query_row(
+            "SELECT file_path FROM books WHERE hash = ?1 AND deleted = 0",
+            [hash],
+            |r| r.get(0),
+        )
+        .map_err(db_err)?;
+
+    let bytes = backend.download_book_file(hash)?;
+    if crate::sha256_of_bytes(&bytes) != hash {
+        return Err(SyncError::Other("下载文件校验失败（哈希不符）".into()));
+    }
+
+    let abs = base_dir.join(&rel);
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| SyncError::Other(format!("创建书库目录失败：{e}")))?;
+    }
+    std::fs::write(&abs, &bytes).map_err(|e| SyncError::Other(format!("写入文件失败：{e}")))?;
+    sync_engine::set_cloud_state(db, hash, "synced").map_err(db_err)?;
     Ok(())
 }
 

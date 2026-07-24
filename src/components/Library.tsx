@@ -9,6 +9,7 @@ import {
   renameBook,
   saveCover,
   setTotalPages,
+  syncDownloadBook,
   syncStatus,
   takeOpenedUrls,
   type Book,
@@ -42,18 +43,33 @@ const SORT_LABELS: Record<SortKey, string> = {
 };
 
 export default function Library({ onOpenBook }: Props) {
-  /** 云端书籍本机还没有文件本体（文件同步在后续版本），拦截打开并提示 */
-  function tryOpenBook(book: Book) {
+  /** 点开云端书（remote）：按需下载文件本体，完成后打开；已在下载则忽略重复点击 */
+  async function tryOpenBook(book: Book) {
     if (book.cloud_state === "remote") {
-      pushNotice(
-        "info",
-        `《${book.title}》的文件在云端，尚未下载到本机（书目与进度已同步，文件同步功能即将上线）`
-      );
+      if (downloadingRef.current.has(book.hash)) return;
+      downloadingRef.current.add(book.hash);
+      setDownloading(new Set(downloadingRef.current));
+      pushNotice("info", `正在下载《${book.title}》…`);
+      try {
+        await syncDownloadBook(book.hash);
+        const fresh = await listBooks(sort, query);
+        setBooks(fresh);
+        const opened = fresh.find((b) => b.hash === book.hash);
+        if (opened) onOpenBook(opened);
+      } catch (e) {
+        pushNotice("error", `下载《${book.title}》失败：${String(e)}`);
+      } finally {
+        downloadingRef.current.delete(book.hash);
+        setDownloading(new Set(downloadingRef.current));
+      }
       return;
     }
     onOpenBook(book);
   }
   const [books, setBooks] = useState<Book[]>([]);
+  /** 正在下载的书 hash 集合：state 触发重渲染显示进度，ref 供异步闭包读最新值防重复点击 */
+  const [downloading, setDownloading] = useState<Set<string>>(new Set());
+  const downloadingRef = useRef<Set<string>>(new Set());
   const [sort, setSort] = useState<SortKey>("recent");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -467,17 +483,22 @@ export default function Library({ onOpenBook }: Props) {
               <div className="book-meta">
                 <span className="book-meta-progress">{progressText(book)}</span>
                 <span className="book-meta-icons">
-                  {book.cloud_state === "remote" && (
-                    <svg className="meta-cloud" viewBox="0 0 22 16" aria-label="云端待下载">
-                      <path
-                        d="M6.2 13.5h9.6a3.7 3.7 0 0 0 .7-7.33A5.5 5.5 0 0 0 5.7 6.9a3.3 3.3 0 0 0 .5 6.6Z"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  )}
+                  {book.cloud_state === "remote" &&
+                    (downloading.has(book.hash) ? (
+                      <span className="meta-downloading" aria-label="下载中">
+                        下载中…
+                      </span>
+                    ) : (
+                      <svg className="meta-cloud" viewBox="0 0 22 16" aria-label="云端待下载">
+                        <path
+                          d="M6.2 13.5h9.6a3.7 3.7 0 0 0 .7-7.33A5.5 5.5 0 0 0 5.7 6.9a3.3 3.3 0 0 0 .5 6.6Z"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    ))}
                   <button
                     className="meta-more"
                     type="button"

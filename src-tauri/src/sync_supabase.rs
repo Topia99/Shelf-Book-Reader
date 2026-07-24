@@ -339,6 +339,71 @@ impl SyncBackend for SupabaseBackend {
     }
 }
 
+impl SupabaseBackend {
+    /// 书籍文件在 R2 的对象键：{user_id}/books/{sha256}.pdf（内容寻址 + 用户前缀隔离，
+    /// 下载端凭自身 user_id + 书籍 hash 即可推导，无需在本地额外存键）。
+    fn book_object_key(&self, sha256: &str) -> Result<String, SyncError> {
+        let user_id = self
+            .session
+            .as_ref()
+            .map(|s| s.user_id.clone())
+            .ok_or(SyncError::Unauthorized)?;
+        Ok(format!("{user_id}/books/{sha256}.pdf"))
+    }
+
+    /// 上传书籍文件本体：签发预签名 PUT → 直传 R2 → 回填云端 file_key/file_size。
+    /// 配额超限时 sign_upload_url 直接返回 QuotaExceeded，调用方据此停止本轮上传。
+    pub(crate) fn upload_book_file(&self, sha256: &str, bytes: &[u8]) -> Result<(), SyncError> {
+        let key = self.book_object_key(sha256)?;
+        let signed = self.sign_upload_url(&key, bytes.len() as i64)?;
+
+        let resp = self
+            .client
+            .put(&signed.url)
+            .body(bytes.to_vec())
+            .send()
+            .map_err(|e| SyncError::Network(format!("R2 上传失败：{e}")))?;
+        if !resp.status().is_success() {
+            return Err(SyncError::Network(format!("R2 上传返回 {}", resp.status())));
+        }
+
+        let user_id = self
+            .session
+            .as_ref()
+            .map(|s| s.user_id.clone())
+            .ok_or(SyncError::Unauthorized)?;
+        let request = self.apply_auth(
+            self.client
+                .patch(self.rest_url(&format!(
+                    "/books?user_id=eq.{user_id}&sha256=eq.{sha256}"
+                )))
+                .json(&json!({ "file_key": key, "file_size": bytes.len() as i64 })),
+        )?;
+        self.send_empty(request)
+    }
+
+    /// 下载书籍文件本体：推导对象键 → 签发预签名 GET → 拉取字节。
+    /// 远端对象不存在（对方尚未传完）时返回可识别的 Other 错误。
+    pub(crate) fn download_book_file(&self, sha256: &str) -> Result<Vec<u8>, SyncError> {
+        let key = self.book_object_key(sha256)?;
+        let signed = self.sign_download_url(&key)?;
+        let resp = self
+            .client
+            .get(&signed.url)
+            .send()
+            .map_err(|e| SyncError::Network(format!("R2 下载失败：{e}")))?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Err(SyncError::Other("远端文件尚未就绪".into()));
+        }
+        if !resp.status().is_success() {
+            return Err(SyncError::Network(format!("R2 下载返回 {}", resp.status())));
+        }
+        resp.bytes()
+            .map(|b| b.to_vec())
+            .map_err(|e| SyncError::Network(format!("R2 下载读取失败：{e}")))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct AuthApiResponse {
     access_token: Option<String>,
