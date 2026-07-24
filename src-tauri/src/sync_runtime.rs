@@ -445,13 +445,17 @@ fn download_book(
         let _ = token_store::save_session(&fresh);
     }
 
-    let rel: String = db
+    // 落盘路径按固定入库布局推导，不依赖库里存的 file_path：
+    // 远端书插入时该列可能为空（早期版本），join 空串会得到 base 目录本身，
+    // 写入时报 "Is a directory (os error 21)"。
+    let stored: String = db
         .query_row(
             "SELECT file_path FROM books WHERE hash = ?1 AND deleted = 0",
             [hash],
             |r| r.get(0),
         )
         .map_err(db_err)?;
+    let rel = download_rel_path(&stored, hash);
 
     let bytes = backend.download_book_file(hash)?;
     if crate::sha256_of_bytes(&bytes) != hash {
@@ -464,10 +468,45 @@ fn download_book(
             .map_err(|e| SyncError::Other(format!("创建书库目录失败：{e}")))?;
     }
     std::fs::write(&abs, &bytes).map_err(|e| SyncError::Other(format!("写入文件失败：{e}")))?;
+
+    // 回写 file_path（修正空值），并置为已同步
+    db.execute(
+        "UPDATE books SET file_path = ?2 WHERE hash = ?1",
+        rusqlite::params![hash, rel],
+    )
+    .map_err(db_err)?;
     sync_engine::set_cloud_state(db, hash, "synced").map_err(db_err)?;
     Ok(())
 }
 
+/// 下载落盘的相对路径：库里 file_path 为空（早期版本插入的远端书行）时回退到
+/// 固定入库布局 books/<hash>.pdf。空串会让 base.join("") 得到 base 目录本身，
+/// 写入时报 "Is a directory (os error 21)"（真机实测过）。
+fn download_rel_path(stored: &str, hash: &str) -> String {
+    if stored.trim().is_empty() {
+        format!("books/{hash}.pdf")
+    } else {
+        stored.to_string()
+    }
+}
+
 fn db_err(e: rusqlite::Error) -> SyncError {
     SyncError::Other(format!("本地数据库错误：{e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::download_rel_path;
+
+    #[test]
+    fn download_rel_path_空路径回退到固定入库布局() {
+        // 回归：远端书行早期存 ''，join 后得到 base 目录本身 → 写入报 Is a directory(21)
+        assert_eq!(download_rel_path("", "abc123"), "books/abc123.pdf");
+        assert_eq!(download_rel_path("   ", "abc123"), "books/abc123.pdf");
+    }
+
+    #[test]
+    fn download_rel_path_已有路径保持不变() {
+        assert_eq!(download_rel_path("books/xyz.pdf", "abc123"), "books/xyz.pdf");
+    }
 }

@@ -120,11 +120,14 @@ pub(crate) fn merge_remote_books(
          WHERE hash = ?1",
     )?;
     let mut insert_stmt = db.prepare(
+        // file_path 用固定入库布局 books/<hash>.pdf（D10 相对路径）：本机尚无文件，
+        // 但下载落盘要写到这里；早期版本存 '' 会让 join 出目录导致写入失败。
         "INSERT INTO books (
              hash, title, file_path, current_page, added_at, last_opened_at,
              updated_at, deleted, synced_at, cloud_state
          ) VALUES (
-             ?1, ?2, '', 1, datetime(?3 / 1000, 'unixepoch', 'localtime'), NULL,
+             ?1, ?2, 'books/' || ?1 || '.pdf', 1,
+             datetime(?3 / 1000, 'unixepoch', 'localtime'), NULL,
              ?4, ?5, ?4, 'remote'
          )",
     )?;
@@ -452,7 +455,9 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .unwrap();
-        assert_eq!(row.0, "");
+        // 回归：远端书必须带固定入库布局的相对路径，不能是空串——
+        // 空串会让 base.join("") 得到 base 目录本身，下载落盘报 Is a directory(21)
+        assert_eq!(row.0, "books/h1.pdf");
         assert_eq!(row.1, "remote");
         assert_eq!(row.2, 300);
         assert_eq!(row.3, 300);
