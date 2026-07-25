@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -75,6 +75,7 @@ export default function Library({ onOpenBook }: Props) {
   const [busy, setBusy] = useState(false);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
   const [renaming, setRenaming] = useState<Book | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<Book | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -217,6 +218,18 @@ export default function Library({ onOpenBook }: Props) {
       unlistenPromise?.then((fn) => fn()).catch(() => {});
     };
   }, [importPaths]);
+
+  // 菜单渲染后按视口边界夹取位置，避免右列书/近边缘弹出时溢出屏幕（真机 WKWebView 实测）
+  useLayoutEffect(() => {
+    const el = ctxMenuRef.current;
+    if (!ctxMenu || !el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const m = 8;
+    const left = Math.max(m, Math.min(ctxMenu.x, window.innerWidth - width - m));
+    const top = Math.max(m, Math.min(ctxMenu.y, window.innerHeight - height - m));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  }, [ctxMenu]);
 
   // 点击任意处关闭右键菜单
   useEffect(() => {
@@ -525,7 +538,7 @@ export default function Library({ onOpenBook }: Props) {
       {dragOver && <div className="drop-overlay">松开以添加 PDF 到书库</div>}
 
       {ctxMenu && (
-        <div className="context-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
+        <div className="context-menu" ref={ctxMenuRef} style={{ left: ctxMenu.x, top: ctxMenu.y }}>
           <button onClick={() => tryOpenBook(ctxMenu.book)}>打开</button>
           <button onClick={() => setRenaming(ctxMenu.book)}>重命名</button>
           <button className="danger" onClick={() => setConfirmRemove(ctxMenu.book)}>
