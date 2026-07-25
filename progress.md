@@ -5,7 +5,7 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-24（修 iOS 书卡 ⋯ 菜单 toggle 关闭）
+**最后更新**：2026-07-24（多账号本地隔离设计定稿，方案 A · MA-1~9 待实现）
 **当前阶段**：阶段 4 基本收尾——iOS 真机通过 ✅、P4-6~8 ✅、P4-9 内存初筛通过（待真机复核）🔄、**P4-10 TestFlight 流水线完成** ✅（本地+GitHub Actions 双路径端到端验证，tag→自动发布）；剩余：P4-11 邀测试员（用户，教程已给）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ✅（本地+CI 双发布路径打通，2 个构建在 TestFlight，就差用户邀测试员 P4-11）｜M4 商店上线 ⏳
 
@@ -101,6 +101,25 @@
 | P5-3 | 云书架 + 按需下载 | 🔄 | 下载核心完成 + R2 往返验证（download_book_file 已在 e2e 测试拉回校验一致）：`sync_download_book` 命令（reply-style，180s）→ 推导 `books/<hash>.pdf` 键 → 预签名 GET → 校验 SHA-256 → 写库 → synced；前端 Library remote 书点击即下载（下载中角标+防重+完成打开）。**待**：真机/双端 UI 联调（另一端登录看云端书→点击下载打开）+ 封面显示（P5-2） |
 | P5-4 | 传输策略设置页 | 🔄 | 第一轮完成（无云端风险部分）：**配额展示**（get_quota→REST user_quota，AccountPanel 显示已用/上限+进度条，curl 验证查询返回 219B/512MB）+ **自动上传开关**（sync_meta 存 auto_upload_files，run_cycle 门控 upload_pending_files；关=仅同步元数据/进度/封面不传大文件，重开即 syncNow 补传）。「仅 Wi-Fi」因 iOS webview 无法可靠检测网络类型，用「自动上传开关」替代给带宽控制权。tsc/build/clippy/47 测试干净。**第二轮待做**：配额双计修复（sign 预扣配额，失败重试/封面/重传都会累计，实测 219B 远超实际——需改 sign-url 函数去掉预扣 + 触发器按 file_key 重算 bytes_used，涉云端部署） |
 | P5-5 | 四端联调 | 🚫 | P5-3, 阶段4 |
+
+## 多账号本地隔离（方案 A · bug 修复 epic）
+
+> 设计 + 技术细节 + 完整拆分见 [docs/多账号本地隔离设计.md](docs/多账号本地隔离设计.md)。
+> 背景：单设备多账号共用一个 library.db + 内容寻址文件 + 设备级游标，账号切换不重置同步账本 → 删后重加/切号打开报错、丢数据。用户 2026-07-24 拍板方案 A（本地库按账号隔离 + 匿名库）。
+
+| ID | 任务 | 状态 | 依赖 |
+|---|---|---|---|
+| MA-1 | Active 束 + AppState 重构 + open_account + 18 处字段路由 | ⏳ | — |
+| MA-2 | 迁移 migrate_to_account_layout（session→uid / 否则 anonymous）+ 单测 | ⏳ | MA-1 |
+| MA-3 | 启动选账号（setup 读 session 选目录 + spawn 对应 db_path） | ⏳ | MA-1, MA-2 |
+| MA-4 | 引擎 SwitchAccount 命令 + SignIn/SignUp reply 返回 user_id | ⏳ | MA-1 |
+| MA-5 | sign-in/up/out 编排（切 active + asset scope + SwitchAccount + emit library-changed） | ⏳ | MA-3, MA-4 |
+| MA-6 | 前端监听 library-changed → reload；AccountPanel 刷新 | ⏳ | MA-5 |
+| MA-7 | revive/tombstone 重置（cloud_state/synced_at/current_page）+ 单测 | ⏳ | MA-1 |
+| MA-8 | R2 孤儿文件清理（后续独立任务） | ⏳ | — |
+| MA-9 | 文件共享+refcount（可选优化） | ⏳ | — |
+
+分两阶段：① MA-1~3 隔离骨架　② MA-4~7 切换协调+前端+修复。每阶段各自 CI 绿。
 
 ## 阶段 6：上架
 
