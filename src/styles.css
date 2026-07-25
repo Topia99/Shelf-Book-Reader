@@ -410,15 +410,38 @@ button {
   align-items: center;
   gap: 6px;
 }
-.meta-cloud {
-  width: 19px;
-  height: 14px;
-  color: var(--text-dim);
-}
-.meta-downloading {
+/* 书卡状态标签：云端待下载 / 下载中 / 本地已就绪 */
+.meta-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-size: 11px;
-  color: var(--accent);
+  line-height: 1;
+  color: var(--text-dim);
   white-space: nowrap;
+}
+.meta-cloud {
+  width: 15px;
+  height: 11px;
+}
+.meta-local {
+  width: 13px;
+  height: 13px;
+}
+.meta-status-local {
+  color: #3a9a63; /* 柔和绿：已在本机 */
+}
+.meta-status-downloading {
+  color: var(--accent);
+}
+.meta-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  animation: account-spin 800ms linear infinite;
 }
 .meta-more {
   display: inline-flex;

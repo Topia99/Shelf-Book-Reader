@@ -46,7 +46,10 @@ export default function Library({ onOpenBook }: Props) {
   /** 点开云端书（remote）：按需下载文件本体，完成后打开；已在下载则忽略重复点击 */
   async function tryOpenBook(book: Book) {
     if (book.cloud_state === "remote") {
-      if (downloadingRef.current.has(book.hash)) return;
+      if (downloadingRef.current.has(book.hash)) {
+        pushNotice("info", `《${book.title}》正在下载…`);
+        return;
+      }
       downloadingRef.current.add(book.hash);
       setDownloading(new Set(downloadingRef.current));
       pushNotice("info", `正在下载《${book.title}》…`);
@@ -501,13 +504,17 @@ export default function Library({ onOpenBook }: Props) {
               <div className="book-meta">
                 <span className="book-meta-progress">{progressText(book)}</span>
                 <span className="book-meta-icons">
-                  {book.cloud_state === "remote" &&
-                    (downloading.has(book.hash) ? (
-                      <span className="meta-downloading" aria-label="下载中">
-                        下载中…
-                      </span>
-                    ) : (
-                      <svg className="meta-cloud" viewBox="0 0 22 16" aria-label="云端待下载">
+                  {downloading.has(book.hash) ? (
+                    <span
+                      className="meta-status meta-status-downloading"
+                      title="正在下载"
+                    >
+                      <span className="meta-spinner" aria-label="正在下载" />
+                      下载中
+                    </span>
+                  ) : book.cloud_state === "remote" ? (
+                    <span className="meta-status" title="云端 · 点击下载">
+                      <svg className="meta-cloud" viewBox="0 0 22 16" aria-hidden="true">
                         <path
                           d="M6.2 13.5h9.6a3.7 3.7 0 0 0 .7-7.33A5.5 5.5 0 0 0 5.7 6.9a3.3 3.3 0 0 0 .5 6.6Z"
                           fill="none"
@@ -516,7 +523,23 @@ export default function Library({ onOpenBook }: Props) {
                           strokeLinejoin="round"
                         />
                       </svg>
-                    ))}
+                      云端
+                    </span>
+                  ) : (
+                    <span className="meta-status meta-status-local" title="已在本机">
+                      <svg className="meta-local" viewBox="0 0 16 16" aria-hidden="true">
+                        <path
+                          d="M3.2 8.4l3 3 6.6-7"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      本地
+                    </span>
+                  )}
                   <button
                     className="meta-more"
                     type="button"
