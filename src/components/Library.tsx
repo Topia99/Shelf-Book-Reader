@@ -307,6 +307,11 @@ export default function Library({ onOpenBook }: Props) {
   }
 
   function openTouchMenu(book: Book, anchor: HTMLElement) {
+    // 再次点击同一本书的 ⋯ 关闭菜单（toggle）；按钮上的 stopPropagation 挡掉了外部关闭监听
+    if (ctxMenu?.book.id === book.id) {
+      setCtxMenu(null);
+      return;
+    }
     const rect = anchor.getBoundingClientRect();
     setCtxMenu({ x: rect.right, y: rect.bottom, book });
   }

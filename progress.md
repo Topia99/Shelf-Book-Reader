@@ -5,7 +5,7 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-24（修 iOS 书卡 ⋯ 菜单出屏）
+**最后更新**：2026-07-24（修 iOS 书卡 ⋯ 菜单 toggle 关闭）
 **当前阶段**：阶段 4 基本收尾——iOS 真机通过 ✅、P4-6~8 ✅、P4-9 内存初筛通过（待真机复核）🔄、**P4-10 TestFlight 流水线完成** ✅（本地+GitHub Actions 双路径端到端验证，tag→自动发布）；剩余：P4-11 邀测试员（用户，教程已给）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ✅（本地+CI 双发布路径打通，2 个构建在 TestFlight，就差用户邀测试员 P4-11）｜M4 商店上线 ⏳
 
@@ -125,6 +125,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-24（修 iOS 书卡 ⋯ 菜单无法再点关闭）**：用户反馈点开 ⋯ 菜单后再点同一个 ⋯ 不能取消弹窗。根因：⋯ 按钮 onClick 的 `e.stopPropagation()` 挡掉了「点外部关闭」的 window click 监听，而 `openTouchMenu` 每次无条件 `setCtxMenu(...)` 重开，故第二次点只是重新打开、看似无反应。修复=`openTouchMenu` 改 toggle：`ctxMenu?.book.id === book.id` 则 `setCtxMenu(null)` 关闭，否则正常打开；点另一本书的 ⋯ 仍切换，点菜单外仍由原 window 监听关闭。单处改动（Library.tsx），纯前端，不影响桌面右键（走 onContextMenu 不经此函数）。tsc/vite build 干净。自动 tap 通道受限（MCP xcode-select 误报 + System Events 无辅助功能授权），交互二次点关闭待用户真机/模拟器确认。CI 待推送验证。
 - **2026-07-24（修 iOS 书卡 ⋯ 菜单出屏）**：用户真机反馈右列书的管理菜单（打开/重命名/从书库移除）弹出时溢出屏幕右边缘被切掉。根因：`.context-menu` 为 `position:fixed` 且以 `left` 向右生长（min-width 150px），`openTouchMenu` 把锚点 x 设为 ⋯ 按钮的 `rect.right`；右列按钮贴近视口右缘，菜单向右展开即出屏（左列/桌面居中不触发，桌面右键用 clientX 同属潜在越界）。修复=菜单渲染后加 `useLayoutEffect` 按视口边界夹取 left/top（`Math.max(8, Math.min(anchor, innerWidth-width-8))`，绘制前完成无闪烁），触屏与桌面右键两入口同护；仅改 Library.tsx（+ref +layout effect），不碰桌面阅读器视觉（D7 无关）、无 schema/Rust 改动。验证：tsc/vite build 干净；模拟器实跑 app 健康、左列菜单在屏内；Browser pane 用真实 `.context-menu` CSS 复现——修复前锚点 x=360 菜单右缘 510 溢出 135px（正是截图被切残片），修复后夹取到 left=217/right=367 完整落在 375 视口内。**纯前端改动，需重新出包（新 build/dev 安装）用户方能真机复验**。CI 三 job 全绿（[run 30142187035](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/30142187035)）。
 - **2026-07-22（P5-3 真机双端实测：修下载写入 Is a directory bug）**：用户 iPhone+Mac 同账号实测——Mac 上传成功、iPhone 能看到云端书（封面是渐变占位，因 P5-2 封面上传未做，属预期），但**点击下载失败：「写入文件失败：Is a directory (os error 21)」**。根因：`merge_remote_books` 插入远端书时 `file_path` 存**空串**，下载时 `base_dir.join("")` 得到 base 目录本身，写入即报 21。双修：① 插入端改存固定入库布局 `'books/' || hash || '.pdf'`（更新原断言 `""`→`books/h1.pdf` 并注明防回退）；② 下载端抽出纯函数 `download_rel_path`——库里为空则回退 canonical 路径（**兼容用户手机上已存在的空路径行，无需清数据**），落盘后回写 file_path。+2 单测钉住。clippy 干净、44 测试通过。**需重新出包**（Rust 改动）才能在真机复验。
 - **2026-07-22（阶段 5 启动：P5-1 上传 + P5-3 下载核心实现）**：读设计文档确认地基已就位（元数据同步/签名+配额 Edge Function/cloud_state 语义/CloudBook 带 file_key 全就绪），P5 本质=补文件字节传输层。关键简化：R2 键内容寻址+用户前缀（`{user_id}/books/{hash}.pdf`），下载端凭自身 user_id+hash 自推导，**无需改本地 schema**。决策（用户拍板）：登录后自动上传（移动端默认 Wi-Fi）+ MVP 单次 PUT（≤100MB）。实现：① sync_engine 加 `collect_uploadable`/`set_cloud_state`（+2 单测）；② sync_supabase 加 `upload_book_file`（sign PUT+直传 R2+PATCH file_key）/`download_book_file`（sign GET，404→尚未就绪）；③ sync_runtime run_cycle 元数据同步后加上传趟（配额满停止、瞬时失败回退重试、>100MB 跳过），加 `DownloadBook` reply 命令 + `download_book`（校验 SHA-256 写库置 synced）；④ lib.rs 加 `sha256_of_bytes` + `sync_download_book` 命令；⑤ 前端 Library 把 remote 书拦截换成点击下载（下载中角标/防重/完成打开）。clippy 干净、tsc 干净、cargo test 42 passed。**端到端 R2 往返已实测通过**：新增 sync_supabase `#[ignore]` real_r2_roundtrip 集成测试（真实注册账号→登录→push→upload_book_file→download_book_file→SHA-256 校验一致）。**当场抓到并修真 bug**：sign-url 函数只收 `books/<hash>.pdf`、内部才加 `{user_id}/` 前缀（正则 `^books\/…`），原 book_object_key 多带 user_id 前缀致 403「Key is not allowed」——改为不带前缀。踩坑：zsh `UID` 只读→TUID；P2-6 当初本地栈验证未暴露此云端契约。
