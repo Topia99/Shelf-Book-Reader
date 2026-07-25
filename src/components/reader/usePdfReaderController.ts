@@ -9,7 +9,7 @@ import {
 import { saveCover, setTotalPages, updateProgress, type Book } from "../../api";
 import { cleanWord, localDictSource, type LookupResult } from "../../dict";
 import { isIos, isModKey, isTouchDevice } from "../../platform";
-import { isPasswordError, openPdf, pdfjs, renderCoverPng, type PDFDocumentProxy } from "../../pdf";
+import { isPasswordError, openPdf, pdfjs, renderCoverJpeg, type PDFDocumentProxy } from "../../pdf";
 import type { PopupAnchor } from "../WordPopup";
 
 export type ZoomMode = "fit-width" | "fit-page" | "custom";
@@ -127,8 +127,8 @@ export function usePdfReaderController({
           setTotalPages(book.id, d.numPages).catch(() => {});
         }
         if (!book.cover_path) {
-          renderCoverPng(d)
-            .then((png) => saveCover(book.hash, png))
+          renderCoverJpeg(d)
+            .then((jpeg) => saveCover(book.hash, jpeg))
             .catch(() => {});
         }
         loadOutline(d).then(setOutline);

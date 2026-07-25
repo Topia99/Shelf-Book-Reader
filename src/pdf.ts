@@ -24,18 +24,22 @@ export function isPasswordError(e: unknown): boolean {
 }
 
 /** 渲染第一页为封面 PNG 字节。渲染宽度约 320px。 */
-export async function renderCoverPng(doc: PDFDocumentProxy): Promise<number[]> {
+/** 首页封面缩略图：480px 宽 JPEG（体积小，便于云同步与配额；另端下载即用）。 */
+export async function renderCoverJpeg(doc: PDFDocumentProxy): Promise<number[]> {
   const page = await doc.getPage(1);
   const base = page.getViewport({ scale: 1 });
-  const scale = 320 / base.width;
+  const scale = 480 / base.width;
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(viewport.width);
   canvas.height = Math.ceil(viewport.height);
   const ctx = canvas.getContext("2d")!;
+  // JPEG 不支持透明，先铺白底避免透明区变黑
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvasContext: ctx, viewport }).promise;
   const blob = await new Promise<Blob>((resolve, reject) =>
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/png")
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), "image/jpeg", 0.82)
   );
   return Array.from(new Uint8Array(await blob.arrayBuffer()));
 }

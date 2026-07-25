@@ -400,6 +400,68 @@ impl SupabaseBackend {
             .map(|b| b.to_vec())
             .map_err(|e| SyncError::Network(format!("R2 下载读取失败：{e}")))
     }
+
+    /// 封面对象键：covers/<sha256>.jpg（函数内部再加 {user_id}/ 前缀，同 book_object_key）。
+    fn cover_object_key(&self, sha256: &str) -> Result<String, SyncError> {
+        self.session.as_ref().ok_or(SyncError::Unauthorized)?;
+        Ok(format!("covers/{sha256}.jpg"))
+    }
+
+    /// 上传封面缩略图到 R2 并回填云端 books.cover_key。
+    pub(crate) fn upload_cover_file(&self, sha256: &str, bytes: &[u8]) -> Result<(), SyncError> {
+        let key = self.cover_object_key(sha256)?;
+        let signed = self.sign_upload_url(&key, bytes.len() as i64)?;
+
+        let resp = self
+            .client
+            .put(&signed.url)
+            .body(bytes.to_vec())
+            .send()
+            .map_err(|e| SyncError::Network(format!("R2 封面上传失败：{e}")))?;
+        if !resp.status().is_success() {
+            return Err(SyncError::Network(format!(
+                "R2 封面上传返回 {}",
+                resp.status()
+            )));
+        }
+
+        let user_id = self
+            .session
+            .as_ref()
+            .map(|s| s.user_id.clone())
+            .ok_or(SyncError::Unauthorized)?;
+        let request = self.apply_auth(
+            self.client
+                .patch(self.rest_url(&format!(
+                    "/books?user_id=eq.{user_id}&sha256=eq.{sha256}"
+                )))
+                .json(&json!({ "cover_key": key })),
+        )?;
+        self.send_empty(request)
+    }
+
+    /// 下载封面缩略图字节（远端无封面时返回可识别的 Other 错误）。
+    pub(crate) fn download_cover_file(&self, sha256: &str) -> Result<Vec<u8>, SyncError> {
+        let key = self.cover_object_key(sha256)?;
+        let signed = self.sign_download_url(&key)?;
+        let resp = self
+            .client
+            .get(&signed.url)
+            .send()
+            .map_err(|e| SyncError::Network(format!("R2 封面下载失败：{e}")))?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Err(SyncError::Other("远端封面尚未就绪".into()));
+        }
+        if !resp.status().is_success() {
+            return Err(SyncError::Network(format!(
+                "R2 封面下载返回 {}",
+                resp.status()
+            )));
+        }
+        resp.bytes()
+            .map(|b| b.to_vec())
+            .map_err(|e| SyncError::Network(format!("R2 封面下载读取失败：{e}")))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -459,7 +521,11 @@ struct BookUpsertRow {
     author: Option<String>,
     page_count: Option<i64>,
     file_size: i64,
+    // 元数据 push 恒不带这两列（collect_dirty 恒 None）：省略后 PostgREST merge-duplicates
+    // 不更新缺失列，避免把 upload_*_file 已 PATCH 的 file_key/cover_key 抹成 null。
+    #[serde(skip_serializing_if = "Option::is_none")]
     cover_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     file_key: Option<String>,
     updated_at: String,
     deleted: bool,
@@ -938,7 +1004,19 @@ mod tests {
 
         let got = backend.download_book_file(&hash).expect("download 失败");
         assert_eq!(got, bytes, "下载字节应与上传一致");
-        eprintln!("[test] 下载校验通过：{} 字节，内容一致 ✓", got.len());
+        eprintln!("[test] 文件下载校验通过：{} 字节，内容一致 ✓", got.len());
+
+        // P5-2：封面往返（covers/<hash>.jpg 走 COVER_KEY_RE）
+        let cover = b"\xff\xd8\xff\xe0 fake-jpeg cover bytes for P5-2".to_vec();
+        backend
+            .upload_cover_file(&hash, &cover)
+            .expect("upload_cover 失败");
+        eprintln!("[test] 封面上传成功：{} 字节", cover.len());
+        let got_cover = backend
+            .download_cover_file(&hash)
+            .expect("download_cover 失败");
+        assert_eq!(got_cover, cover, "封面下载字节应与上传一致");
+        eprintln!("[test] 封面下载校验通过：{} 字节，内容一致 ✓", got_cover.len());
     }
 
     #[test]

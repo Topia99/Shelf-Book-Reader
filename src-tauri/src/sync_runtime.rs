@@ -391,6 +391,55 @@ fn run_cycle(
 
     // 文件上传放在元数据同步之后：即使上传失败也不影响书目/进度同步。
     upload_pending_files(db, backend, base_dir)?;
+
+    // 封面同步（次要，best-effort：失败不影响主流程，下轮重试）
+    let _ = upload_pending_covers(db, backend, base_dir);
+    let _ = download_pending_covers(db, backend, base_dir);
+    Ok(())
+}
+
+/// 上传本机封面缩略图（cover_path 有、cover_key 空的非 remote 书）→ 回填 cover_key。
+fn upload_pending_covers(
+    db: &Connection,
+    backend: &SupabaseBackend,
+    base_dir: &Path,
+) -> Result<(), SyncError> {
+    for c in sync_engine::collect_uploadable_covers(db).map_err(db_err)? {
+        // c.file_path 此处装的是 cover_path（covers/<hash>.jpg）
+        let abs = base_dir.join(&c.file_path);
+        let Ok(bytes) = std::fs::read(&abs) else {
+            continue; // 封面文件缺失，跳过
+        };
+        match backend.upload_cover_file(&c.hash, &bytes) {
+            Ok(()) => {
+                let key = format!("covers/{}.jpg", c.hash);
+                sync_engine::set_cover_key(db, &c.hash, &key).map_err(db_err)?;
+            }
+            Err(_) => continue, // 封面非关键，本轮跳过下轮重试
+        }
+    }
+    Ok(())
+}
+
+/// 下载云端封面（cover_key 有、cover_path 空的书）→ 落盘 → 回填 cover_path 供前端显示。
+fn download_pending_covers(
+    db: &Connection,
+    backend: &SupabaseBackend,
+    base_dir: &Path,
+) -> Result<(), SyncError> {
+    for hash in sync_engine::collect_downloadable_covers(db).map_err(db_err)? {
+        let Ok(bytes) = backend.download_cover_file(&hash) else {
+            continue; // 远端封面尚未就绪或瞬时失败，下轮重试
+        };
+        let rel = format!("covers/{hash}.jpg");
+        let abs = base_dir.join(&rel);
+        if let Some(parent) = abs.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::write(&abs, &bytes).is_ok() {
+            sync_engine::set_cover_path(db, &hash, &rel).map_err(db_err)?;
+        }
+    }
     Ok(())
 }
 

@@ -108,6 +108,59 @@ pub(crate) fn set_cloud_state(db: &Connection, hash: &str, state: &str) -> rusql
     Ok(())
 }
 
+/// 待上传封面的书：本机有封面文件（cover_path 非空）但云端尚无（cover_key 空），
+/// 且不是纯远端书（remote 的封面来自云端、不该反向上传）。
+pub(crate) fn collect_uploadable_covers(
+    db: &Connection,
+) -> rusqlite::Result<Vec<UploadCandidate>> {
+    let mut stmt = db.prepare(
+        "SELECT hash, cover_path FROM books
+         WHERE cover_path IS NOT NULL AND cover_key IS NULL
+           AND cloud_state != 'remote' AND deleted = 0
+         ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(UploadCandidate {
+                hash: r.get(0)?,
+                file_path: r.get(1)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// 待下载封面的书：云端有封面（cover_key 非空）但本机还没有（cover_path 空）。
+pub(crate) fn collect_downloadable_covers(db: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = db.prepare(
+        "SELECT hash FROM books
+         WHERE cover_key IS NOT NULL AND cover_path IS NULL AND deleted = 0
+         ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// 上传成功后回填本机 cover_key（去重，下轮不再重传）。
+pub(crate) fn set_cover_key(db: &Connection, hash: &str, key: &str) -> rusqlite::Result<()> {
+    db.execute(
+        "UPDATE books SET cover_key = ?2 WHERE hash = ?1",
+        params![hash, key],
+    )?;
+    Ok(())
+}
+
+/// 下载封面落盘后回填 cover_path（前端据此显示封面）。
+pub(crate) fn set_cover_path(db: &Connection, hash: &str, rel: &str) -> rusqlite::Result<()> {
+    db.execute(
+        "UPDATE books SET cover_path = ?2 WHERE hash = ?1",
+        params![hash, rel],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn merge_remote_books(
     db: &Connection,
     rows: &[CloudBook],
@@ -124,11 +177,11 @@ pub(crate) fn merge_remote_books(
         // 但下载落盘要写到这里；早期版本存 '' 会让 join 出目录导致写入失败。
         "INSERT INTO books (
              hash, title, file_path, current_page, added_at, last_opened_at,
-             updated_at, deleted, synced_at, cloud_state
+             updated_at, deleted, synced_at, cloud_state, cover_key
          ) VALUES (
              ?1, ?2, 'books/' || ?1 || '.pdf', 1,
              datetime(?3 / 1000, 'unixepoch', 'localtime'), NULL,
-             ?4, ?5, ?4, 'remote'
+             ?4, ?5, ?4, 'remote', ?6
          )",
     )?;
     let mut update_stmt = db.prepare(
@@ -137,7 +190,8 @@ pub(crate) fn merge_remote_books(
              deleted = ?3,
              updated_at = ?4,
              synced_at = ?4,
-             cloud_state = 'remote'
+             cloud_state = 'remote',
+             cover_key = COALESCE(?5, cover_key)
          WHERE id = ?1",
     )?;
 
@@ -162,7 +216,8 @@ pub(crate) fn merge_remote_books(
                     remote.title,
                     now_ms,
                     remote.updated_at,
-                    if remote.deleted { 1 } else { 0 }
+                    if remote.deleted { 1 } else { 0 },
+                    remote.cover_key,
                 ])?;
                 stats.inserted += 1;
             }
@@ -194,7 +249,8 @@ pub(crate) fn merge_remote_books(
                     id,
                     remote.title,
                     if remote.deleted { 1 } else { 0 },
-                    remote.updated_at
+                    remote.updated_at,
+                    remote.cover_key,
                 ])?;
                 stats.updated += 1;
             }
@@ -686,5 +742,74 @@ mod tests {
             }
         );
         assert_eq!(snapshot, snapshot_again);
+    }
+
+    // ---- P5-2 封面同步 ----
+
+    #[test]
+    fn 待上传封面_仅有本地封面且云端未记录且非remote() {
+        let db = memory_db();
+        insert_book_row(&db, "h1", "有封面本地书", 1, 100, 100, 0);
+        insert_book_row(&db, "h2", "无封面本地书", 1, 100, 100, 0);
+        set_cover_path(&db, "h1", "covers/h1.jpg").unwrap();
+        // h2 无封面 → 不在待上传列表
+        // h3：remote 书带 cover_path 也不该上传（封面来自云端）
+        insert_book_row(&db, "h3", "远端书", 1, 100, 100, 0);
+        db.execute(
+            "UPDATE books SET cloud_state='remote', cover_path='covers/h3.jpg' WHERE hash='h3'",
+            [],
+        )
+        .unwrap();
+
+        let ups = collect_uploadable_covers(&db).unwrap();
+        assert_eq!(ups.len(), 1);
+        assert_eq!(ups[0].hash, "h1");
+        assert_eq!(ups[0].file_path, "covers/h1.jpg");
+
+        // 上传后回填 cover_key → 不再出现在待上传
+        set_cover_key(&db, "h1", "covers/h1.jpg").unwrap();
+        assert!(collect_uploadable_covers(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 待下载封面_云端有key但本机无封面文件() {
+        let db = memory_db();
+        // 远端书：cover_key 有、cover_path 空 → 待下载
+        merge_remote_books(
+            &db,
+            &[CloudBook {
+                cover_key: Some("covers/h1.jpg".into()),
+                ..cloud_book("h1", "远端带封面书", 300, false)
+            }],
+            9_999,
+        )
+        .unwrap();
+
+        let downs = collect_downloadable_covers(&db).unwrap();
+        assert_eq!(downs, vec!["h1".to_string()]);
+
+        // 落盘回填 cover_path 后 → 不再待下载
+        set_cover_path(&db, "h1", "covers/h1.jpg").unwrap();
+        assert!(collect_downloadable_covers(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn merge_持久化远端_cover_key() {
+        let db = memory_db();
+        merge_remote_books(
+            &db,
+            &[CloudBook {
+                cover_key: Some("covers/h1.jpg".into()),
+                ..cloud_book("h1", "远端书", 300, false)
+            }],
+            9_999,
+        )
+        .unwrap();
+        let ck: Option<String> = db
+            .query_row("SELECT cover_key FROM books WHERE hash='h1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(ck.as_deref(), Some("covers/h1.jpg"));
     }
 }

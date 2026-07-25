@@ -16,7 +16,7 @@ import {
   type SortKey,
   type SyncStatus,
 } from "../api";
-import { isPasswordError, openPdf, renderCoverPng } from "../pdf";
+import { isPasswordError, openPdf, renderCoverJpeg } from "../pdf";
 import { isTouchDevice } from "../platform";
 import AccountPanel from "./AccountPanel";
 import BookCover from "./BookCover";
@@ -127,8 +127,8 @@ export default function Library({ onOpenBook }: Props) {
         } catch {
           /* 元数据读取失败不影响入库 */
         }
-        const png = await renderCoverPng(doc);
-        await saveCover(book.hash, png);
+        const jpeg = await renderCoverJpeg(doc);
+        await saveCover(book.hash, jpeg);
       } finally {
         await doc.destroy();
       }

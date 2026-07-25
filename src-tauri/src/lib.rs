@@ -467,12 +467,12 @@ fn save_cover(hash: String, data: Vec<u8>, state: State<AppState>) -> Result<Str
     if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("非法的 hash".into());
     }
-    let path = state.covers_dir.join(format!("{hash}.png"));
+    let path = state.covers_dir.join(format!("{hash}.jpg"));
     fs::write(&path, data).map_err(|e| format!("保存封面失败：{e}"))?;
     let db = state.db.lock().unwrap();
     db.execute(
         "UPDATE books SET cover_path = ?2, updated_at = ?3 WHERE hash = ?1",
-        rusqlite::params![hash, format!("covers/{hash}.png"), now_ms()],
+        rusqlite::params![hash, format!("covers/{hash}.jpg"), now_ms()],
     )
     .map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
@@ -665,23 +665,33 @@ fn create_schema(db: &Connection) -> rusqlite::Result<()> {
 
 fn migrate_schema(db: &Connection) -> rusqlite::Result<()> {
     let version: i64 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version >= 2 {
-        return Ok(());
+
+    // v2：同步字段
+    if version < 2 {
+        db.execute_batch(
+            "BEGIN IMMEDIATE;
+             ALTER TABLE books ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE books ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE books ADD COLUMN synced_at INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE books ADD COLUMN cloud_state TEXT NOT NULL DEFAULT 'local';
+             CREATE TABLE IF NOT EXISTS sync_meta (
+                 key TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );
+             PRAGMA user_version = 2;
+             COMMIT;",
+        )?;
     }
 
-    db.execute_batch(
-        "BEGIN IMMEDIATE;
-         ALTER TABLE books ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
-         ALTER TABLE books ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
-         ALTER TABLE books ADD COLUMN synced_at INTEGER NOT NULL DEFAULT 0;
-         ALTER TABLE books ADD COLUMN cloud_state TEXT NOT NULL DEFAULT 'local';
-         CREATE TABLE IF NOT EXISTS sync_meta (
-             key TEXT PRIMARY KEY,
-             value TEXT NOT NULL
-         );
-         PRAGMA user_version = 2;
-         COMMIT;",
-    )?;
+    // v3：封面对象键（追踪封面是否已同步到云；非空=云端有封面，用于上传去重与另端下载）
+    if version < 3 {
+        db.execute_batch(
+            "BEGIN IMMEDIATE;
+             ALTER TABLE books ADD COLUMN cover_key TEXT;
+             PRAGMA user_version = 3;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -861,7 +871,7 @@ mod tests {
     // ---- SQLite v2 迁移 / 墓碑 / updated_at ----
 
     #[test]
-    fn migrate_schema_sets_user_version_2_and_is_idempotent() {
+    fn migrate_schema_sets_user_version_3_and_is_idempotent() {
         let db = Connection::open_in_memory().unwrap();
         create_schema(&db).unwrap();
 
@@ -869,7 +879,7 @@ mod tests {
         let version: i64 = db
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
         let sync_meta_exists: i64 = db
             .query_row(
@@ -880,11 +890,21 @@ mod tests {
             .unwrap();
         assert_eq!(sync_meta_exists, 1);
 
+        // v3：cover_key 列存在
+        let has_cover_key: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('books') WHERE name = 'cover_key'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_cover_key, 1);
+
         migrate_schema(&db).unwrap();
         let version_again: i64 = db
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version_again, 2);
+        assert_eq!(version_again, 3);
     }
 
     #[test]
