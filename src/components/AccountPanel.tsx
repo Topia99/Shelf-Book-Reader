@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  getSyncSettings,
+  setAutoUploadFiles,
   syncDeleteAccount,
+  syncGetQuota,
   syncNow,
   syncSignIn,
   syncSignOut,
   syncSignUp,
+  type QuotaInfo,
   type SyncStatus,
 } from "../api";
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 interface Props {
   open: boolean;
@@ -73,7 +84,30 @@ export default function AccountPanel({ open, status, onClose, onRefreshStatus }:
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteText, setDeleteText] = useState("");
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
+  const [autoUpload, setAutoUpload] = useState(true);
   const emailInputRef = useRef<HTMLInputElement>(null);
+
+  // 打开且已登录时拉配额与同步偏好
+  useEffect(() => {
+    if (!open || !status.signed_in) return;
+    syncGetQuota()
+      .then(setQuota)
+      .catch(() => setQuota(null));
+    getSyncSettings()
+      .then((s) => setAutoUpload(s.auto_upload_files))
+      .catch(() => {});
+  }, [open, status.signed_in, status.last_sync_ms]);
+
+  async function toggleAutoUpload(next: boolean) {
+    setAutoUpload(next);
+    try {
+      await setAutoUploadFiles(next);
+      if (next) await syncNow(); // 重新开启时立刻补传
+    } catch {
+      setAutoUpload(!next); // 失败回滚
+    }
+  }
 
   useEffect(() => {
     if (!open) {
@@ -241,6 +275,44 @@ export default function AccountPanel({ open, status, onClose, onRefreshStatus }:
               <span className="account-row-label">同步状态</span>
               <span className="account-status-text">{lastSyncText}</span>
             </div>
+
+            {/* 传输：配额 + 自动上传开关 */}
+            <div className="account-row">
+              <span className="account-row-label">云存储</span>
+              <span className="account-status-text">
+                {quota
+                  ? `${formatBytes(quota.bytes_used)} / ${formatBytes(quota.bytes_limit)}`
+                  : "…"}
+              </span>
+            </div>
+            {quota && quota.bytes_limit > 0 && (
+              <div
+                className="quota-bar"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={quota.bytes_limit}
+                aria-valuenow={quota.bytes_used}
+              >
+                <div
+                  className="quota-bar-fill"
+                  style={{
+                    width: `${Math.min(100, (quota.bytes_used / quota.bytes_limit) * 100)}%`,
+                  }}
+                />
+              </div>
+            )}
+            <label className="account-toggle-row">
+              <span>
+                自动上传书籍文件
+                <span className="account-toggle-hint">关闭后仅同步书目/进度/封面，不上传大文件</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={autoUpload}
+                onChange={(e) => void toggleAutoUpload(e.target.checked)}
+              />
+            </label>
+
             {status.last_error && <div className="account-error">{status.last_error}</div>}
             {error && <div className="account-error">{error}</div>}
 

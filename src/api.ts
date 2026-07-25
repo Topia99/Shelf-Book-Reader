@@ -71,3 +71,21 @@ export const syncNow = () => invoke<void>("sync_now");
 /** 按需下载云端书籍文件本体（点开 remote 书时调用），完成后本机即有文件可打开 */
 export const syncDownloadBook = (hash: string) =>
   invoke<void>("sync_download_book", { hash });
+
+export interface QuotaInfo {
+  bytes_used: number;
+  bytes_limit: number;
+}
+
+/** 查询云存储配额（已用/上限字节） */
+export const syncGetQuota = () => invoke<QuotaInfo>("sync_get_quota");
+
+export interface SyncSettings {
+  auto_upload_files: boolean;
+}
+
+export const getSyncSettings = () => invoke<SyncSettings>("get_sync_settings");
+
+/** 自动上传书籍文件开关；关掉=仅同步元数据/进度/封面，不上传大文件本体 */
+export const setAutoUploadFiles = (enabled: boolean) =>
+  invoke<void>("set_auto_upload_files", { enabled });

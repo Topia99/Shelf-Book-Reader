@@ -654,6 +654,40 @@ button {
   flex-direction: column;
   gap: 4px;
 }
+/* 传输设置：配额条 + 自动上传开关 */
+.quota-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-subtle, #ececec);
+  overflow: hidden;
+}
+.quota-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.account-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.account-toggle-row input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.account-toggle-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
 .account-row-label {
   font-size: 12px;
   color: var(--text-dim);

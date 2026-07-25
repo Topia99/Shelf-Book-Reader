@@ -436,6 +436,45 @@ fn sync_download_book(hash: String, sync: State<sync_runtime::SyncHandle>) -> Re
 }
 
 #[tauri::command]
+fn sync_get_quota(
+    sync: State<sync_runtime::SyncHandle>,
+) -> Result<crate::sync::QuotaInfo, String> {
+    sync.request_quota()
+}
+
+/// 前端设置页读取的同步偏好。
+#[derive(serde::Serialize)]
+struct SyncSettings {
+    auto_upload_files: bool,
+}
+
+#[tauri::command]
+fn get_sync_settings(state: State<AppState>) -> Result<SyncSettings, String> {
+    let db = state.db.lock().unwrap();
+    let auto_upload_files = db
+        .query_row(
+            "SELECT value FROM sync_meta WHERE key = 'auto_upload_files'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    Ok(SyncSettings { auto_upload_files })
+}
+
+#[tauri::command]
+fn set_auto_upload_files(enabled: bool, state: State<AppState>) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    db.execute(
+        "INSERT INTO sync_meta (key, value) VALUES ('auto_upload_files', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = ?1",
+        [if enabled { "1" } else { "0" }],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn rename_book(id: i64, title: String, state: State<AppState>) -> Result<(), String> {
     let title = title.trim();
     if title.is_empty() {
@@ -1150,6 +1189,9 @@ pub fn run() {
             sync_status,
             sync_now,
             sync_download_book,
+            sync_get_quota,
+            get_sync_settings,
+            set_auto_upload_files,
             take_opened_urls
         ])
         .build(tauri::generate_context!())

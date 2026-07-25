@@ -462,6 +462,17 @@ impl SupabaseBackend {
             .map(|b| b.to_vec())
             .map_err(|e| SyncError::Network(format!("R2 封面下载读取失败：{e}")))
     }
+
+    /// 查询当前用户云存储配额（已用/上限字节，供设置页展示）。
+    pub(crate) fn get_quota(&self) -> Result<crate::sync::QuotaInfo, SyncError> {
+        let request = self.apply_auth(
+            self.client
+                .get(self.rest_url("/user_quota"))
+                .query(&[("select", "bytes_used,bytes_limit"), ("limit", "1")]),
+        )?;
+        let rows: Vec<crate::sync::QuotaInfo> = self.send_json(request)?;
+        Ok(rows.into_iter().next().unwrap_or_default())
+    }
 }
 
 #[derive(Debug, Deserialize)]

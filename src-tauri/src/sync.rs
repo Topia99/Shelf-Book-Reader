@@ -66,6 +66,15 @@ pub struct SignedUrl {
     pub expires_at: i64,
 }
 
+/// 用户云存储配额快照（供设置页展示已用/上限）。
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+pub struct QuotaInfo {
+    /// 已用字节数。
+    pub bytes_used: i64,
+    /// 上限字节数。
+    pub bytes_limit: i64,
+}
+
 /// 登录态快照，用于保存用户身份与令牌续期信息。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AuthSession {

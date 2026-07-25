@@ -66,6 +66,10 @@ pub(crate) enum SyncCommand {
         hash: String,
         reply: Sender<Result<(), String>>,
     },
+    /// 查询云存储配额（设置页展示）
+    GetQuota {
+        reply: Sender<Result<crate::sync::QuotaInfo, String>>,
+    },
     /// 请求一次同步（防抖合并，可安全高频发送）
     SyncNow,
 }
@@ -118,6 +122,15 @@ impl SyncHandle {
 
     pub(crate) fn status(&self) -> SyncStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// 查询配额（带值回执，10 秒超时）。
+    pub(crate) fn request_quota(&self) -> Result<crate::sync::QuotaInfo, String> {
+        let (reply_tx, reply_rx) = channel();
+        self.send(SyncCommand::GetQuota { reply: reply_tx })?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "同步引擎响应超时".to_string())?
     }
 }
 
@@ -293,6 +306,10 @@ fn engine_loop(
                     download_book(&db, &mut backend, &base_dir, &hash).map_err(|e| e.to_string());
                 let _ = reply.send(result);
             }
+            Ok(SyncCommand::GetQuota { reply }) => {
+                let result = backend.get_quota().map_err(|e| e.to_string());
+                let _ = reply.send(result);
+            }
             Ok(SyncCommand::SyncNow) => {
                 if status.lock().unwrap().signed_in {
                     // 防抖：合并 5 秒内的连发；且与上次成功同步至少间隔 30 秒
@@ -390,12 +407,27 @@ fn run_cycle(
     }
 
     // 文件上传放在元数据同步之后：即使上传失败也不影响书目/进度同步。
-    upload_pending_files(db, backend, base_dir)?;
+    // 「仅元数据」模式（用户在设置里关掉自动上传）下跳过大文件本体上传，
+    // 但书目/进度/封面仍照常同步（封面小，云书架体验依赖它）。
+    if auto_upload_enabled(db) {
+        upload_pending_files(db, backend, base_dir)?;
+    }
 
     // 封面同步（次要，best-effort：失败不影响主流程，下轮重试）
     let _ = upload_pending_covers(db, backend, base_dir);
     let _ = download_pending_covers(db, backend, base_dir);
     Ok(())
+}
+
+/// 读「自动上传文件」开关（sync_meta，缺省=开）。关掉即「仅元数据」模式。
+fn auto_upload_enabled(db: &Connection) -> bool {
+    db.query_row(
+        "SELECT value FROM sync_meta WHERE key = 'auto_upload_files'",
+        [],
+        |r| r.get::<_, String>(0),
+    )
+    .map(|v| v != "0")
+    .unwrap_or(true)
 }
 
 /// 上传本机封面缩略图（cover_path 有、cover_key 空的非 remote 书）→ 回填 cover_key。
