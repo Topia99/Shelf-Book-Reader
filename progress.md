@@ -5,7 +5,7 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-24（多账号隔离 Phase ① 骨架 MA-1~3 代码+单测，CI 待验）
+**最后更新**：2026-07-24（多账号隔离 Phase ② 切换+修复 MA-4~7 代码+单测，CI 待验/端到端待复验）
 **当前阶段**：阶段 4 基本收尾——iOS 真机通过 ✅、P4-6~8 ✅、P4-9 内存初筛通过（待真机复核）🔄、**P4-10 TestFlight 流水线完成** ✅（本地+GitHub Actions 双路径端到端验证，tag→自动发布）；剩余：P4-11 邀测试员（用户，教程已给）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ✅（本地+CI 双发布路径打通，2 个构建在 TestFlight，就差用户邀测试员 P4-11）｜M4 商店上线 ⏳
 
@@ -112,10 +112,10 @@
 | MA-1 | Active 束 + AppState 重构 + open_account + 18 处字段路由 | ✅ | — |
 | MA-2 | 迁移 migrate_to_account_layout（session→uid / 否则 anonymous）+ 单测 | ✅ | MA-1 |
 | MA-3 | 启动选账号（setup 读 session 选目录 + spawn 对应 db_path） | ✅ | MA-1, MA-2 |
-| MA-4 | 引擎 SwitchAccount 命令 + SignIn/SignUp reply 返回 user_id | ⏳ | MA-1 |
-| MA-5 | sign-in/up/out 编排（切 active + asset scope + SwitchAccount + emit library-changed） | ⏳ | MA-3, MA-4 |
-| MA-6 | 前端监听 library-changed → reload；AccountPanel 刷新 | ⏳ | MA-5 |
-| MA-7 | revive/tombstone 重置（cloud_state/synced_at/current_page）+ 单测 | ⏳ | MA-1 |
+| MA-4 | 引擎 SwitchAccount 命令 + SignIn/SignUp reply 返回 user_id | 🔄 | MA-1 |
+| MA-5 | sign-in/up/out 编排（切 active + asset scope + SwitchAccount + emit library-changed） | 🔄 | MA-3, MA-4 |
+| MA-6 | 前端监听 library-changed → reload；AccountPanel 刷新 | 🔄 | MA-5 |
+| MA-7 | revive/tombstone 重置（cloud_state/synced_at/current_page）+ 单测 | ✅ | MA-1 |
 | MA-8 | R2 孤儿文件清理（后续独立任务） | ⏳ | — |
 | MA-9 | 文件共享+refcount（可选优化） | ⏳ | — |
 
@@ -144,6 +144,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-24（多账号隔离 Phase ② 切换协调+修复：MA-4~7 代码+单测）**：让账号切换无需重启并根治删后重加/切号打开报错。MA-4：`sync_runtime` 加 `SwitchAccount{db_path}` 命令（engine_loop 的 db/base_dir 改 mut，收到即重开连接+重设 busy_timeout+重算 base）；SignIn/SignUp reply 由 `Result<(),String>` 改为回传 `user_id`（加 `request_auth`）；**关键竞态修复**——把「登录后立即同步」的 pending 触发从 SignIn 挪到 SwitchAccount，否则引擎会在旧库上用新会话同步、把新账号云数据灌进旧库。MA-5：`lib.rs` sign-in/up/out/delete 改为编排——`switch_active_account(app,state,sync,key)`：`open_account_at` 新账号目录→asset scope 白名单→替换 `AppState.active`（锁不跨 request 持有）→发 SwitchAccount 切引擎→emit `library-changed`；登出/删号切回 anonymous。MA-6：`Library.tsx` 监听 `library-changed`→reload+refreshSyncStatus。MA-7：`revive_deleted_book_record` 复活时重置 `current_page=1/synced_at=0/cloud_state='local'`（否则旧进度复活+文件不重传），更新单测钉住。clippy 零警告、cargo test 52 passed、tsc/vite build 干净。**端到端待用户双端复验**（A 加书→删→切 B→重加→打开正常+正确上传+无 404；需重新出包）。CI 待推送验证。
 - **2026-07-24（多账号隔离 Phase ① 骨架：MA-1~3 代码+单测）**：实现方案 A 阶段①（设计见 [docs/多账号本地隔离设计.md](docs/多账号本地隔离设计.md)）。MA-1：`lib.rs` 引入 `Active` 束（db+base_dir+books_dir+covers_dir+account_key），`AppState` 改为 `{ active: Mutex<Active>, dict, root }`；10 个命令、18 处字段访问路由到 `state.active.lock()`（单锁取一致快照）。MA-2：`migrate_to_account_layout(root,key)` 一次性把旧「设备单库」布局（root/library.db+books/+covers/）整体移入 `accounts/<key>/`——library.db 作原子提交点先移、失败即回退旧布局（数据仍在 root），主库就位后再尽力移 WAL/SHM/books/covers；已迁移/全新安装各自短路。MA-3：`resolve_account_key_at_startup` 读钥匙串 session 的 user_id（无则 anonymous，不 refresh），setup 里 `root→选 key→迁移→open_account_at→asset scope→spawn(account_base/library.db)`；dict 仍按设备级 root 解析。新增 5 单测（全新/迁移/user_id 目录/幂等/open_account 建库）。clippy 零警告、cargo test 52 passed。**未跑桌面 tauri dev 冒烟**（会迁移用户 Mac 实时数据，待用户发话）。切号能力属 Phase ②（MA-4~7），当前切号仍需重启但数据已按账号隔离不再串。CI 三 job 全绿（[run 30223106461](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/30223106461)）。
 - **2026-07-24（P5-4 第一轮：配额展示 + 自动上传开关）**：传输设置页无云端风险部分。① 配额展示：sync.rs 加 QuotaInfo；SupabaseBackend 加 `get_quota`（REST GET user_quota）；sync_runtime 加 GetQuota reply 命令 + request_quota；lib.rs 加 sync_get_quota 命令；AccountPanel 显示「已用/上限 + 进度条」（curl 等价查询实测返回 219B/512MB）。② 自动上传开关：lib.rs 加 get_sync_settings/set_auto_upload_files（存 sync_meta）；run_cycle 加 auto_upload_enabled 门控 upload_pending_files（关=仅元数据模式，书目/进度/封面仍同步）；AccountPanel 加开关（关掉省流量/配额，重开 syncNow 补传）。「仅 Wi-Fi」因 iOS WKWebView 无 Network Information API 不可靠→用自动上传开关替代。tsc/build/clippy/47 测试干净。**第二轮**：配额双计修复（涉 Edge Function + 触发器云端部署）。
 - **2026-07-24（v0.3.1 出包：文件/封面同步 + 下载修复 + 状态标签）**：bump 0.3.1，推 tag v0.3.1 触发三端协调发布全绿——[Win exe 12.4MB + Mac dmg 16.2MB 发到 Release](https://github.com/Topia99/Shelf-Book-Reader/releases/tag/v0.3.1) + iOS TestFlight 0.3.1。含 P5-1 上传/P5-2 封面/P5-3 下载修复/书卡状态标签/元数据 push 抹 key 修复。待用户双端（iPhone+Mac 同账号）端到端复验：Mac 导入→自动上传(含封面)→iPhone 见「☁云端」+真封面→点击(转圈)下载→变「✓本地」→打开。

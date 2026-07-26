@@ -195,6 +195,17 @@ export default function Library({ onOpenBook }: Props) {
     };
   }, [importPaths]);
 
+  // 账号切换（登录/登出/删号）后后端换库并广播 library-changed → 重载书库 + 刷新账号状态
+  useEffect(() => {
+    const unlistenPromise = listen("library-changed", () => {
+      reload().catch((e) => pushNotice("error", String(e)));
+      refreshSyncStatus().catch(() => {});
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
+    };
+  }, [reload, refreshSyncStatus]);
+
   // 拖拽 PDF 入库
   useEffect(() => {
     if (isTouchDevice) {

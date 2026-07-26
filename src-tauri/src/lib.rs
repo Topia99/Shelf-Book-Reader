@@ -12,7 +12,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use url::Url;
 
 /// 未登录时使用的账号目录名。真实账号 key 为 UUID，二者无冲突。
@@ -35,7 +35,6 @@ struct AppState {
     /// 只读词典库；缺失时为 None，查词一律返回未找到。不随账号变化。
     dict: Mutex<Option<Connection>>,
     /// 数据根目录 <base>，账号目录为 <base>/accounts/<key>
-    #[allow(dead_code)] // MA-5 账号切换时用于推导新账号目录
     root: PathBuf,
 }
 
@@ -149,12 +148,17 @@ fn get_book_by_id(db: &Connection, id: i64) -> Result<Book, String> {
 }
 
 fn revive_deleted_book_record(db: &Connection, id: i64, file_path: &str) -> rusqlite::Result<()> {
+    // 复活 = 当全新本地书对待：重置进度与同步账本，否则旧进度诡异复活，
+    // 且 cloud_state 残留 synced/remote 会让本地文件永不重新上传（MA-7）。
     db.execute(
         "UPDATE books
          SET deleted = 0,
              file_path = ?2,
              updated_at = ?3,
-             added_at = datetime('now', 'localtime')
+             added_at = datetime('now', 'localtime'),
+             current_page = 1,
+             synced_at = 0,
+             cloud_state = 'local'
          WHERE id = ?1",
         rusqlite::params![id, file_path, now_ms()],
     )?;
@@ -395,42 +399,88 @@ fn update_progress(
     Ok(())
 }
 
-// ---------- 账号与同步命令（P3-6） ----------
+// ---------- 账号与同步命令（P3-6 / MA-5） ----------
+
+/// 把 UI 与同步引擎的库连接一起切到账号 key 的目录，并通知前端重载书库。
+/// 用于登录（key=user_id）/登出/删除账号（key=anonymous）后的账号切换编排。
+fn switch_active_account(
+    app: &tauri::AppHandle,
+    state: &State<AppState>,
+    sync: &State<sync_runtime::SyncHandle>,
+    key: &str,
+) -> Result<(), String> {
+    let base = account_dir(&state.root, key);
+    let active = open_account_at(&base, key).map_err(|e| e.to_string())?;
+    // 新账号书库/封面目录加入 asset 协议白名单（否则封面 403）
+    let scope = app.asset_protocol_scope();
+    scope
+        .allow_directory(&active.books_dir, true)
+        .map_err(|e| e.to_string())?;
+    scope
+        .allow_directory(&active.covers_dir, true)
+        .map_err(|e| e.to_string())?;
+    // 替换 UI 连接（锁在语句结束即释放，不跨 request 持有，避免与引擎回执互等）
+    *state.active.lock().unwrap() = active;
+    // 切引擎连接（引擎在新库上跑后续同步）
+    sync.request(|reply| sync_runtime::SyncCommand::SwitchAccount {
+        db_path: base.join("library.db"),
+        reply,
+    })?;
+    // 通知前端重载书库
+    let _ = app.emit("library-changed", ());
+    Ok(())
+}
 
 #[tauri::command]
 fn sync_sign_in(
     email: String,
     password: String,
+    app: tauri::AppHandle,
+    state: State<AppState>,
     sync: State<sync_runtime::SyncHandle>,
 ) -> Result<(), String> {
-    sync.request(|reply| sync_runtime::SyncCommand::SignIn {
+    let user_id = sync.request_auth(|reply| sync_runtime::SyncCommand::SignIn {
         email,
         password,
         reply,
-    })
+    })?;
+    switch_active_account(&app, &state, &sync, &user_id)
 }
 
 #[tauri::command]
 fn sync_sign_up(
     email: String,
     password: String,
+    app: tauri::AppHandle,
+    state: State<AppState>,
     sync: State<sync_runtime::SyncHandle>,
 ) -> Result<(), String> {
-    sync.request(|reply| sync_runtime::SyncCommand::SignUp {
+    let user_id = sync.request_auth(|reply| sync_runtime::SyncCommand::SignUp {
         email,
         password,
         reply,
-    })
+    })?;
+    switch_active_account(&app, &state, &sync, &user_id)
 }
 
 #[tauri::command]
-fn sync_sign_out(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
-    sync.request(|reply| sync_runtime::SyncCommand::SignOut { reply })
+fn sync_sign_out(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    sync: State<sync_runtime::SyncHandle>,
+) -> Result<(), String> {
+    sync.request(|reply| sync_runtime::SyncCommand::SignOut { reply })?;
+    switch_active_account(&app, &state, &sync, ANONYMOUS_KEY)
 }
 
 #[tauri::command]
-fn sync_delete_account(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
-    sync.request(|reply| sync_runtime::SyncCommand::DeleteAccount { reply })
+fn sync_delete_account(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    sync: State<sync_runtime::SyncHandle>,
+) -> Result<(), String> {
+    sync.request(|reply| sync_runtime::SyncCommand::DeleteAccount { reply })?;
+    switch_active_account(&app, &state, &sync, ANONYMOUS_KEY)
 }
 
 #[tauri::command]
@@ -1056,20 +1106,38 @@ mod tests {
     fn readd_same_hash_revives_deleted_book() {
         let db = memory_library_db();
         let id = insert_test_book(&db, "cafebabe", "已删除旧书");
-        db.execute("UPDATE books SET deleted = 1 WHERE id = ?1", [id])
-            .unwrap();
+        // 模拟删除前的状态：读到 42 页、已同步到云
+        db.execute(
+            "UPDATE books SET deleted = 1, current_page = 42, synced_at = 999,
+                              cloud_state = 'synced' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
 
         revive_deleted_book_record(&db, id, "books/cafebabe.pdf").unwrap();
 
-        let (deleted, file_path): (i64, String) = db
+        let (deleted, file_path, page, synced_at, cloud_state): (i64, String, i64, i64, String) = db
             .query_row(
-                "SELECT deleted, file_path FROM books WHERE hash = 'cafebabe'",
+                "SELECT deleted, file_path, current_page, synced_at, cloud_state
+                 FROM books WHERE hash = 'cafebabe'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(deleted, 0);
         assert_eq!(file_path, "books/cafebabe.pdf");
+        // MA-7：复活按全新本地书处理——进度归 1、账本清零、待重新上传
+        assert_eq!(page, 1);
+        assert_eq!(synced_at, 0);
+        assert_eq!(cloud_state, "local");
     }
 
     #[test]
@@ -1366,7 +1434,6 @@ pub fn run() {
             // 此处只缓存 URL 并转发给前端，入库复用前端既有 importPaths 链路（复制/查重/封面/刷新）。
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
             if let tauri::RunEvent::Opened { urls } = &event {
-                use tauri::Emitter;
                 let list: Vec<String> = urls.iter().map(|u| u.to_string()).collect();
                 if let Some(state) = app.try_state::<OpenedUrls>() {
                     state.0.lock().unwrap().extend(list.clone());

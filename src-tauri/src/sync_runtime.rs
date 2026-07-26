@@ -48,14 +48,20 @@ pub(crate) enum SyncCommand {
     SignIn {
         email: String,
         password: String,
-        reply: Sender<Result<(), String>>,
+        reply: Sender<Result<String, String>>, // 成功回传 user_id（供 UI 侧切账号目录）
     },
     SignUp {
         email: String,
         password: String,
-        reply: Sender<Result<(), String>>,
+        reply: Sender<Result<String, String>>, // 成功回传 user_id
     },
     SignOut {
+        reply: Sender<Result<(), String>>,
+    },
+    /// 切换引擎自身的 library.db 连接到新账号目录（登录/登出编排的第二步）。
+    /// db_path = <base>/accounts/<key>/library.db；重开连接 + 重置本轮调度状态。
+    SwitchAccount {
+        db_path: PathBuf,
         reply: Sender<Result<(), String>>,
     },
     DeleteAccount {
@@ -124,6 +130,18 @@ impl SyncHandle {
         self.status.lock().unwrap().clone()
     }
 
+    /// 发送认证命令（登录/注册），成功回传 user_id（30 秒超时）。
+    pub(crate) fn request_auth(
+        &self,
+        make: impl FnOnce(Sender<Result<String, String>>) -> SyncCommand,
+    ) -> Result<String, String> {
+        let (reply_tx, reply_rx) = channel();
+        self.send(make(reply_tx))?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| "同步引擎响应超时".to_string())?
+    }
+
     /// 查询配额（带值回执，10 秒超时）。
     pub(crate) fn request_quota(&self) -> Result<crate::sync::QuotaInfo, String> {
         let (reply_tx, reply_rx) = channel();
@@ -168,7 +186,7 @@ fn engine_loop(
     rx: Receiver<SyncCommand>,
     status: Arc<Mutex<SyncStatus>>,
 ) {
-    let db = match Connection::open(&db_path) {
+    let mut db = match Connection::open(&db_path) {
         Ok(db) => db,
         Err(e) => {
             update_status(&app, &status, |s| {
@@ -180,7 +198,8 @@ fn engine_loop(
     let _ = db.busy_timeout(Duration::from_secs(5));
 
     // 文件路径存相对 base（books/<hash>.pdf），上传时拼回绝对；base = library.db 所在目录
-    let base_dir: PathBuf = db_path
+    // db / base_dir 随账号切换（SwitchAccount）热替换
+    let mut base_dir: PathBuf = db_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -235,6 +254,7 @@ fn engine_loop(
                     .map_err(|e| e.to_string())
                     .map(|session| {
                         let _ = token_store::save_session(&session);
+                        session.user_id
                     });
                 let ok = result.is_ok();
                 let _ = reply.send(result);
@@ -245,9 +265,10 @@ fn engine_loop(
                         s.last_error = None;
                     }
                 });
+                // 首轮同步不在这里触发：等 UI 侧发 SwitchAccount 把 db 切到该账号目录后再跑，
+                // 否则会在旧库上用新会话同步、把新账号云数据灌进旧库（竞态）。
                 if ok {
                     failures = 0;
-                    pending = Some(Instant::now());
                 }
             }
             Ok(SyncCommand::SignUp {
@@ -260,6 +281,7 @@ fn engine_loop(
                     .map_err(|e| e.to_string())
                     .map(|session| {
                         let _ = token_store::save_session(&session);
+                        session.user_id
                     });
                 let ok = result.is_ok();
                 let _ = reply.send(result);
@@ -272,8 +294,24 @@ fn engine_loop(
                 });
                 if ok {
                     failures = 0;
-                    pending = Some(Instant::now());
                 }
+            }
+            Ok(SyncCommand::SwitchAccount { db_path, reply }) => {
+                let result = Connection::open(&db_path)
+                    .map(|conn| {
+                        let _ = conn.busy_timeout(Duration::from_secs(5));
+                        db = conn;
+                        base_dir = db_path
+                            .parent()
+                            .map(Path::to_path_buf)
+                            .unwrap_or_else(|| PathBuf::from("."));
+                    })
+                    .map_err(|e| format!("切换账号库失败：{e}"));
+                let ok = result.is_ok();
+                let _ = reply.send(result);
+                // 切库成功且已登录：立即在新库上跑首轮同步；未登录则待命
+                failures = 0;
+                pending = (ok && status.lock().unwrap().signed_in).then(Instant::now);
             }
             Ok(SyncCommand::SignOut { reply }) => {
                 let _ = backend.sign_out(); // 远端登出失败不阻塞本地登出
