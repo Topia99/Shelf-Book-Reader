@@ -5,7 +5,7 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-24（多账号本地隔离设计定稿，方案 A · MA-1~9 待实现）
+**最后更新**：2026-07-24（多账号隔离 Phase ① 骨架 MA-1~3 代码+单测，CI 待验）
 **当前阶段**：阶段 4 基本收尾——iOS 真机通过 ✅、P4-6~8 ✅、P4-9 内存初筛通过（待真机复核）🔄、**P4-10 TestFlight 流水线完成** ✅（本地+GitHub Actions 双路径端到端验证，tag→自动发布）；剩余：P4-11 邀测试员（用户，教程已给）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ✅（本地+CI 双发布路径打通，2 个构建在 TestFlight，就差用户邀测试员 P4-11）｜M4 商店上线 ⏳
 
@@ -109,9 +109,9 @@
 
 | ID | 任务 | 状态 | 依赖 |
 |---|---|---|---|
-| MA-1 | Active 束 + AppState 重构 + open_account + 18 处字段路由 | ⏳ | — |
-| MA-2 | 迁移 migrate_to_account_layout（session→uid / 否则 anonymous）+ 单测 | ⏳ | MA-1 |
-| MA-3 | 启动选账号（setup 读 session 选目录 + spawn 对应 db_path） | ⏳ | MA-1, MA-2 |
+| MA-1 | Active 束 + AppState 重构 + open_account + 18 处字段路由 | 🔄 | — |
+| MA-2 | 迁移 migrate_to_account_layout（session→uid / 否则 anonymous）+ 单测 | 🔄 | MA-1 |
+| MA-3 | 启动选账号（setup 读 session 选目录 + spawn 对应 db_path） | 🔄 | MA-1, MA-2 |
 | MA-4 | 引擎 SwitchAccount 命令 + SignIn/SignUp reply 返回 user_id | ⏳ | MA-1 |
 | MA-5 | sign-in/up/out 编排（切 active + asset scope + SwitchAccount + emit library-changed） | ⏳ | MA-3, MA-4 |
 | MA-6 | 前端监听 library-changed → reload；AccountPanel 刷新 | ⏳ | MA-5 |
@@ -144,6 +144,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-24（多账号隔离 Phase ① 骨架：MA-1~3 代码+单测）**：实现方案 A 阶段①（设计见 [docs/多账号本地隔离设计.md](docs/多账号本地隔离设计.md)）。MA-1：`lib.rs` 引入 `Active` 束（db+base_dir+books_dir+covers_dir+account_key），`AppState` 改为 `{ active: Mutex<Active>, dict, root }`；10 个命令、18 处字段访问路由到 `state.active.lock()`（单锁取一致快照）。MA-2：`migrate_to_account_layout(root,key)` 一次性把旧「设备单库」布局（root/library.db+books/+covers/）整体移入 `accounts/<key>/`——library.db 作原子提交点先移、失败即回退旧布局（数据仍在 root），主库就位后再尽力移 WAL/SHM/books/covers；已迁移/全新安装各自短路。MA-3：`resolve_account_key_at_startup` 读钥匙串 session 的 user_id（无则 anonymous，不 refresh），setup 里 `root→选 key→迁移→open_account_at→asset scope→spawn(account_base/library.db)`；dict 仍按设备级 root 解析。新增 5 单测（全新/迁移/user_id 目录/幂等/open_account 建库）。clippy 零警告、cargo test 52 passed。**未跑桌面 tauri dev 冒烟**（会迁移用户 Mac 实时数据，待用户发话）。切号能力属 Phase ②（MA-4~7），当前切号仍需重启但数据已按账号隔离不再串。CI 待推送验证。
 - **2026-07-24（P5-4 第一轮：配额展示 + 自动上传开关）**：传输设置页无云端风险部分。① 配额展示：sync.rs 加 QuotaInfo；SupabaseBackend 加 `get_quota`（REST GET user_quota）；sync_runtime 加 GetQuota reply 命令 + request_quota；lib.rs 加 sync_get_quota 命令；AccountPanel 显示「已用/上限 + 进度条」（curl 等价查询实测返回 219B/512MB）。② 自动上传开关：lib.rs 加 get_sync_settings/set_auto_upload_files（存 sync_meta）；run_cycle 加 auto_upload_enabled 门控 upload_pending_files（关=仅元数据模式，书目/进度/封面仍同步）；AccountPanel 加开关（关掉省流量/配额，重开 syncNow 补传）。「仅 Wi-Fi」因 iOS WKWebView 无 Network Information API 不可靠→用自动上传开关替代。tsc/build/clippy/47 测试干净。**第二轮**：配额双计修复（涉 Edge Function + 触发器云端部署）。
 - **2026-07-24（v0.3.1 出包：文件/封面同步 + 下载修复 + 状态标签）**：bump 0.3.1，推 tag v0.3.1 触发三端协调发布全绿——[Win exe 12.4MB + Mac dmg 16.2MB 发到 Release](https://github.com/Topia99/Shelf-Book-Reader/releases/tag/v0.3.1) + iOS TestFlight 0.3.1。含 P5-1 上传/P5-2 封面/P5-3 下载修复/书卡状态标签/元数据 push 抹 key 修复。待用户双端（iPhone+Mac 同账号）端到端复验：Mac 导入→自动上传(含封面)→iPhone 见「☁云端」+真封面→点击(转圈)下载→变「✓本地」→打开。
 - **2026-07-24（P5-2 封面缩略图同步）**：补齐云书架封面（解决用户看到的占位封面）。封面统一改 **480px JPEG**（renderCoverJpeg 替 renderCoverPng，白底防透明变黑，quality 0.82；入库时 Library + 首次打开 controller 两处生成，save_cover 存 .jpg）。同步接线：**v3 迁移**加本地 `cover_key` 列（分步迁移 v2→v3，+列存在断言）；sync_supabase 加 `upload_cover_file`（sign PUT `covers/<hash>.jpg` + 直传 R2 + PATCH 云端 cover_key）/`download_cover_file`（sign GET）；sync_engine 加 `collect_uploadable_covers`(cover_path 有/cover_key 空/非 remote)/`collect_downloadable_covers`(cover_key 有/cover_path 空)/`set_cover_key`/`set_cover_path`，merge_remote_books 持久化远端 cover_key（insert +?6、update COALESCE ?5）；sync_runtime run_cycle 尾部加封面上传/下载趟（best-effort、失败下轮重试）。**发现并修 P5-1/P5-2 共有潜伏 bug**：BookUpsertRow 恒发 cover_key/file_key=None，PostgREST merge-duplicates 会把云端已 PATCH 的键抹成 null（翻页触发元数据 push 即复现，另端下不了）——两列加 `#[serde(skip_serializing_if=Option::is_none)]`。验证：tsc/build/clippy 干净、47 单测通过（+3 封面）、**e2e ignore 测试扩展封面往返真实 R2 上传/下载校验一致 ✓**。纯代码改动，真机见效需重新出包。

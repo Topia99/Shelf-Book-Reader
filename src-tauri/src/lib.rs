@@ -15,13 +15,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Manager, State};
 use url::Url;
 
-struct AppState {
-    db: Mutex<Connection>,
-    /// 只读词典库；缺失时为 None，查词一律返回未找到
-    dict: Mutex<Option<Connection>>,
+/// 未登录时使用的账号目录名。真实账号 key 为 UUID，二者无冲突。
+const ANONYMOUS_KEY: &str = "anonymous";
+
+/// 当前生效账号的本地资源束：库连接 + 该账号的目录。
+/// 账号切换时整体替换（见 sync_runtime 的 SwitchAccount 与 sign-in/out 编排）。
+struct Active {
+    db: Connection,
     base_dir: PathBuf,
     books_dir: PathBuf,
     covers_dir: PathBuf,
+    #[allow(dead_code)] // MA-5 账号切换时用于判等/日志
+    account_key: String,
+}
+
+struct AppState {
+    /// 当前账号的库连接与目录，随登录/登出热切换
+    active: Mutex<Active>,
+    /// 只读词典库；缺失时为 None，查词一律返回未找到。不随账号变化。
+    dict: Mutex<Option<Connection>>,
+    /// 数据根目录 <base>，账号目录为 <base>/accounts/<key>
+    #[allow(dead_code)] // MA-5 账号切换时用于推导新账号目录
+    root: PathBuf,
 }
 
 #[derive(Serialize, Clone)]
@@ -218,7 +233,8 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
         Err(e) => return err(e),
     };
 
-    let db = state.db.lock().unwrap();
+    let active = state.active.lock().unwrap();
+    let db = &active.db;
     let existing = db
         .query_row(
             "SELECT id, deleted FROM books WHERE hash = ?1",
@@ -242,18 +258,18 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
                 path: path_str.to_string(),
                 status: "duplicate".into(),
                 message: Some(format!("已在书库中：{}", existing.title)),
-                book: Some(absolutize_book(&state.base_dir, existing)),
+                book: Some(absolutize_book(&active.base_dir, existing)),
             };
         }
 
-        let dest = state.books_dir.join(format!("{hash}.pdf"));
+        let dest = active.books_dir.join(format!("{hash}.pdf"));
         if let Err(e) = fs::copy(src, &dest) {
             let _ = fs::remove_file(&dest); // 清理可能的半截文件（如磁盘满）
             return err(format!("复制入库失败：{e}"));
         }
 
         let revived =
-            revive_deleted_book_record(&db, id, &format!("books/{hash}.pdf")).and_then(|_| {
+            revive_deleted_book_record(db, id, &format!("books/{hash}.pdf")).and_then(|_| {
                 db.query_row(
                     &format!("SELECT {BOOK_COLS} FROM books WHERE id = ?1"),
                     [id],
@@ -266,7 +282,7 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
                 path: path_str.to_string(),
                 status: "added".into(),
                 message: None,
-                book: Some(absolutize_book(&state.base_dir, book)),
+                book: Some(absolutize_book(&active.base_dir, book)),
             },
             Err(e) => {
                 let _ = fs::remove_file(&dest);
@@ -275,7 +291,7 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
         };
     }
 
-    let dest = state.books_dir.join(format!("{hash}.pdf"));
+    let dest = active.books_dir.join(format!("{hash}.pdf"));
     if let Err(e) = fs::copy(src, &dest) {
         let _ = fs::remove_file(&dest); // 清理可能的半截文件（如磁盘满）
         return err(format!("复制入库失败：{e}"));
@@ -306,7 +322,7 @@ fn add_one_book(path_str: &str, state: &State<AppState>) -> AddResult {
             path: path_str.to_string(),
             status: "added".into(),
             message: None,
-            book: Some(absolutize_book(&state.base_dir, book)),
+            book: Some(absolutize_book(&active.base_dir, book)),
         },
         Err(e) => {
             let _ = fs::remove_file(&dest);
@@ -345,19 +361,20 @@ fn list_books_in_db(
 
 #[tauri::command]
 fn list_books(sort: String, query: String, state: State<AppState>) -> Result<Vec<Book>, String> {
-    let db = state.db.lock().unwrap();
-    list_books_in_db(&db, &state.base_dir, &sort, &query)
+    let active = state.active.lock().unwrap();
+    list_books_in_db(&active.db, &active.base_dir, &sort, &query)
 }
 
 #[tauri::command]
 fn remove_book(id: i64, state: State<AppState>) -> Result<(), String> {
-    let db = state.db.lock().unwrap();
-    let book = get_book_by_id(&db, id)?;
-    tombstone_book(&db, id)?;
+    let active = state.active.lock().unwrap();
+    let db = &active.db;
+    let book = get_book_by_id(db, id)?;
+    tombstone_book(db, id)?;
     // 删除书库副本与封面缓存；文件删除失败不阻塞（记录已移除）
-    let _ = fs::remove_file(to_abs(&state.base_dir, &book.file_path));
+    let _ = fs::remove_file(to_abs(&active.base_dir, &book.file_path));
     if let Some(cover) = &book.cover_path {
-        let _ = fs::remove_file(to_abs(&state.base_dir, cover));
+        let _ = fs::remove_file(to_abs(&active.base_dir, cover));
     }
     Ok(())
 }
@@ -370,8 +387,8 @@ fn update_progress(
     sync: State<sync_runtime::SyncHandle>,
 ) -> Result<(), String> {
     {
-        let db = state.db.lock().unwrap();
-        update_progress_in_db(&db, id, page)?;
+        let active = state.active.lock().unwrap();
+        update_progress_in_db(&active.db, id, page)?;
     }
     // 翻页后请求同步（引擎侧防抖合并，失败不影响本地进度保存）
     let _ = sync.send(sync_runtime::SyncCommand::SyncNow);
@@ -450,7 +467,8 @@ struct SyncSettings {
 
 #[tauri::command]
 fn get_sync_settings(state: State<AppState>) -> Result<SyncSettings, String> {
-    let db = state.db.lock().unwrap();
+    let active = state.active.lock().unwrap();
+    let db = &active.db;
     let auto_upload_files = db
         .query_row(
             "SELECT value FROM sync_meta WHERE key = 'auto_upload_files'",
@@ -464,8 +482,8 @@ fn get_sync_settings(state: State<AppState>) -> Result<SyncSettings, String> {
 
 #[tauri::command]
 fn set_auto_upload_files(enabled: bool, state: State<AppState>) -> Result<(), String> {
-    let db = state.db.lock().unwrap();
-    db.execute(
+    let active = state.active.lock().unwrap();
+    active.db.execute(
         "INSERT INTO sync_meta (key, value) VALUES ('auto_upload_files', ?1)
          ON CONFLICT(key) DO UPDATE SET value = ?1",
         [if enabled { "1" } else { "0" }],
@@ -480,8 +498,8 @@ fn rename_book(id: i64, title: String, state: State<AppState>) -> Result<(), Str
     if title.is_empty() {
         return Err("书名不能为空".into());
     }
-    let db = state.db.lock().unwrap();
-    db.execute(
+    let active = state.active.lock().unwrap();
+    active.db.execute(
         "UPDATE books SET title = ?2, updated_at = ?3 WHERE id = ?1",
         rusqlite::params![id, title, now_ms()],
     )
@@ -491,8 +509,8 @@ fn rename_book(id: i64, title: String, state: State<AppState>) -> Result<(), Str
 
 #[tauri::command]
 fn set_total_pages(id: i64, total: i64, state: State<AppState>) -> Result<(), String> {
-    let db = state.db.lock().unwrap();
-    db.execute(
+    let active = state.active.lock().unwrap();
+    active.db.execute(
         "UPDATE books SET total_pages = ?2, updated_at = ?3 WHERE id = ?1",
         rusqlite::params![id, total, now_ms()],
     )
@@ -506,10 +524,10 @@ fn save_cover(hash: String, data: Vec<u8>, state: State<AppState>) -> Result<Str
     if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("非法的 hash".into());
     }
-    let path = state.covers_dir.join(format!("{hash}.jpg"));
+    let active = state.active.lock().unwrap();
+    let path = active.covers_dir.join(format!("{hash}.jpg"));
     fs::write(&path, data).map_err(|e| format!("保存封面失败：{e}"))?;
-    let db = state.db.lock().unwrap();
-    db.execute(
+    active.db.execute(
         "UPDATE books SET cover_path = ?2, updated_at = ?3 WHERE hash = ?1",
         rusqlite::params![hash, format!("covers/{hash}.jpg"), now_ms()],
     )
@@ -677,6 +695,76 @@ fn init_db(base: &Path) -> Result<Connection, Box<dyn std::error::Error>> {
     db.pragma_update(None, "journal_mode", "WAL")?;
     init_library_db(&db)?;
     Ok(db)
+}
+
+/// 账号目录：<base>/accounts/<key>。key = 登录 user_id 或 ANONYMOUS_KEY。
+fn account_dir(root: &Path, key: &str) -> PathBuf {
+    root.join("accounts").join(key)
+}
+
+/// 在指定 base 目录下打开一个账号的本地资源束（建目录 + init_db）。
+/// base 一般是 account_dir(root, key)，迁移失败回退时可能是 root 自身。
+fn open_account_at(base: &Path, key: &str) -> Result<Active, Box<dyn std::error::Error>> {
+    let books_dir = base.join("books");
+    let covers_dir = base.join("covers");
+    fs::create_dir_all(&books_dir)?;
+    fs::create_dir_all(&covers_dir)?;
+    let db = init_db(base)?;
+    Ok(Active {
+        db,
+        base_dir: base.to_path_buf(),
+        books_dir,
+        covers_dir,
+        account_key: key.to_string(),
+    })
+}
+
+/// 启动时按钥匙串会话选择账号 key：有 session 用其 user_id，否则匿名。
+/// 只读取不 refresh——refresh 由同步引擎线程负责（见 sync_runtime）。
+fn resolve_account_key_at_startup() -> String {
+    match token_store::load_session() {
+        Ok(Some(session)) => session.user_id,
+        _ => ANONYMOUS_KEY.to_string(),
+    }
+}
+
+/// 一次性迁移：把旧的「设备单库」布局（<base>/library.db + books/ + covers/）
+/// 整体移入 <base>/accounts/<key>/，返回最终应打开的 base 目录。
+/// - 目标已有库 → 已迁移，直接返回目标
+/// - 无旧库 → 全新安装，返回目标（open_account_at 会创建）
+/// - 需迁移 → 先移 library.db（原子提交点，失败即回退旧布局、数据仍在 root）
+///   成功后再尽力移 WAL/SHM/books/covers
+fn migrate_to_account_layout(root: &Path, key: &str) -> PathBuf {
+    let target = account_dir(root, key);
+    let legacy_db = root.join("library.db");
+
+    if target.join("library.db").is_file() {
+        return target; // 已迁移
+    }
+    if !legacy_db.is_file() {
+        return target; // 全新安装，无旧库可迁
+    }
+
+    if let Err(e) = fs::create_dir_all(&target) {
+        eprintln!("[migrate] 建账号目录失败，回退旧布局: {e}");
+        return root.to_path_buf();
+    }
+    // library.db 是核心，先移；失败即放弃迁移（数据仍在旧位置，安全）
+    if let Err(e) = fs::rename(&legacy_db, target.join("library.db")) {
+        eprintln!("[migrate] 移动 library.db 失败，回退旧布局: {e}");
+        let _ = fs::remove_dir_all(&target); // 清掉半截骨架，下次重试
+        return root.to_path_buf();
+    }
+    // 主库已就位，其余尽力移（同卷 rename 极少失败；失败仅日志）
+    for item in ["library.db-wal", "library.db-shm", "books", "covers"] {
+        let src = root.join(item);
+        if src.exists() {
+            if let Err(e) = fs::rename(&src, target.join(item)) {
+                eprintln!("[migrate] 移动 {item} 失败: {e}");
+            }
+        }
+    }
+    target
 }
 
 fn init_library_db(db: &Connection) -> rusqlite::Result<()> {
@@ -1141,6 +1229,84 @@ mod tests {
         assert_eq!(migrate_old_base(&old, &new), new);
         let _ = fs::remove_dir_all(&root);
     }
+
+    // ---- MA-2 账号目录布局迁移 ----
+
+    #[test]
+    fn account_migrate_fresh_install_returns_account_dir() {
+        let root = fresh_dir("acct-fresh");
+        // 无旧库（全新安装）：返回账号目录，不创建任何东西
+        let base = migrate_to_account_layout(&root, ANONYMOUS_KEY);
+        assert_eq!(base, account_dir(&root, ANONYMOUS_KEY));
+        assert!(!root.join("accounts").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn account_migrate_moves_legacy_single_library_into_anonymous() {
+        let root = fresh_dir("acct-legacy");
+        // 旧的设备单库布局
+        fs::create_dir_all(root.join("books")).unwrap();
+        fs::create_dir_all(root.join("covers")).unwrap();
+        fs::write(root.join("library.db"), b"db").unwrap();
+        fs::write(root.join("books").join("a.pdf"), b"x").unwrap();
+        fs::write(root.join("covers").join("a.jpg"), b"y").unwrap();
+
+        let base = migrate_to_account_layout(&root, ANONYMOUS_KEY);
+        let target = account_dir(&root, ANONYMOUS_KEY);
+        assert_eq!(base, target);
+        // 库/文件/封面都迁入账号目录，旧位置清空
+        assert!(target.join("library.db").is_file());
+        assert!(target.join("books").join("a.pdf").is_file());
+        assert!(target.join("covers").join("a.jpg").is_file());
+        assert!(!root.join("library.db").exists());
+        assert!(!root.join("books").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn account_migrate_uses_user_id_dir_when_signed_in() {
+        let root = fresh_dir("acct-uid");
+        fs::write(root.join("library.db"), b"db").unwrap();
+        let uid = "user-uuid-1234";
+        let base = migrate_to_account_layout(&root, uid);
+        assert_eq!(base, account_dir(&root, uid));
+        assert!(account_dir(&root, uid).join("library.db").is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn account_migrate_is_idempotent_when_already_migrated() {
+        let root = fresh_dir("acct-idem");
+        // 已迁移：账号目录已有库；即便 root 残留一个 library.db 也不应再动
+        let target = account_dir(&root, ANONYMOUS_KEY);
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("library.db"), b"migrated").unwrap();
+        fs::write(root.join("library.db"), b"stale").unwrap();
+
+        let base = migrate_to_account_layout(&root, ANONYMOUS_KEY);
+        assert_eq!(base, target);
+        // 账号目录的库原样保留，未被 root 残留覆盖
+        assert_eq!(fs::read(target.join("library.db")).unwrap(), b"migrated");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn open_account_at_creates_dirs_and_db() {
+        let root = fresh_dir("acct-open");
+        let base = account_dir(&root, ANONYMOUS_KEY);
+        let active = open_account_at(&base, ANONYMOUS_KEY).unwrap();
+        assert_eq!(active.account_key, ANONYMOUS_KEY);
+        assert!(base.join("books").is_dir());
+        assert!(base.join("covers").is_dir());
+        assert!(base.join("library.db").is_file());
+        // 库可用：schema 已建
+        active
+            .db
+            .query_row("SELECT COUNT(*) FROM books", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1149,27 +1315,26 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(OpenedUrls(Mutex::new(Vec::new())))
         .setup(|app| {
-            let base = resolve_base_dir(app)?;
-            let books_dir = base.join("books");
-            let covers_dir = base.join("covers");
-            fs::create_dir_all(&books_dir)?;
-            fs::create_dir_all(&covers_dir)?;
-            // 运行时把书库目录加入 asset 协议白名单；
+            let root = resolve_base_dir(app)?;
+            // 按钥匙串会话选择启动账号，并把旧的「设备单库」布局迁入账号目录
+            let key = resolve_account_key_at_startup();
+            let account_base = migrate_to_account_layout(&root, &key);
+            let active = open_account_at(&account_base, &key)?;
+            // 运行时把当前账号书库目录加入 asset 协议白名单；
             // 配置文件里的 glob 作用域在 Windows 反斜杠路径下匹配不可靠（会 403）
             let scope = app.asset_protocol_scope();
-            scope.allow_directory(&books_dir, true)?;
-            scope.allow_directory(&covers_dir, true)?;
-            let db = init_db(&base)?;
-            let dict = open_dict(app, &base);
+            scope.allow_directory(&active.books_dir, true)?;
+            scope.allow_directory(&active.covers_dir, true)?;
+            // 词典库是设备级（bundled 资源 + 可选 <root>/dict.db 覆盖），不随账号变化
+            let dict = open_dict(app, &root);
             // 同步引擎持有自己的数据库连接（WAL 多连接），与 UI 的连接互不阻塞
-            let sync_handle = sync_runtime::spawn(app.handle().clone(), base.join("library.db"));
+            let sync_handle =
+                sync_runtime::spawn(app.handle().clone(), account_base.join("library.db"));
             app.manage(sync_handle);
             app.manage(AppState {
-                db: Mutex::new(db),
+                active: Mutex::new(active),
                 dict: Mutex::new(dict),
-                base_dir: base,
-                books_dir,
-                covers_dir,
+                root,
             });
             Ok(())
         })
