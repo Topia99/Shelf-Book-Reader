@@ -5,7 +5,7 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-24（v0.3.2 出包：多账号隔离 MA-1~7 + iOS 菜单修复，三端发布全绿，待双端端到端复验）
+**最后更新**：2026-07-24（v0.3.3 出包：最近阅读真排序 + 书库下拉刷新，三端发布全绿，待真机验）
 **当前阶段**：阶段 4 基本收尾——iOS 真机通过 ✅、P4-6~8 ✅、P4-9 内存初筛通过（待真机复核）🔄、**P4-10 TestFlight 流水线完成** ✅（本地+GitHub Actions 双路径端到端验证，tag→自动发布）；剩余：P4-11 邀测试员（用户，教程已给）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ✅（本地+CI 双发布路径打通，2 个构建在 TestFlight，就差用户邀测试员 P4-11）｜M4 商店上线 ⏳
 
@@ -144,6 +144,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-24（v0.3.3 出包：最近阅读真排序 + 下拉刷新）**：bump 0.3.2→0.3.3 + CHANGELOG，推 tag v0.3.3 触发三端协调发布**全绿**——release-desktop（Win exe + Mac dmg → GitHub Release）+ release-ios（TestFlight 0.3.3）均 success。待用户新包验：云端书是否直接现于「最近阅读」+ 书库触屏下拉刷新手感。
 - **2026-07-24（最近阅读真排序 + 书库下拉刷新）**：用户反馈云端下载的书在"最近阅读"里看不到（需切排序再切回才显示）。两处改动：① **改动 1 真排序**——`list_books_in_db` 默认排序 `last_opened_at IS NULL, last_opened_at DESC, added_at DESC`（未读沉底）改为 `COALESCE(last_opened_at, added_at) DESC, id DESC`，没打开过的书用 added_at 兜底排进来，刚下载的云端书出现在顶部而非沉底（真排序非过滤，+单测钉住）。② **改动 2 下拉刷新**——根因是页面 stale：新拉的书要 reload 才显示。后端加阻塞式 `RefreshNow` 命令（跳过防抖/30s 间隔，跑完整 run_cycle 才回执，未登录立即 Ok）+ `sync_refresh_now` 命令（60s）+ api `syncRefreshNow`；前端 `Library.tsx` 在 `.book-grid` 上做触屏下拉刷新（滚到顶下拉→顶部 spinner→`syncRefreshNow()`→`reload()`→收起），`overscroll-behavior-y: contain` + 阻尼封顶；账户面板"立刻同步"改指 `sync_refresh_now`（真正跳过间隔）。clippy 净、cargo test 53 passed、tsc/vite build 干净。**下拉手势真机手感待用户确认**（触屏，模拟器/桌面无手势）。CI 三 job 全绿（[run 30402999833](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/30402999833)）。
 - **2026-07-24（v0.3.2 出包：多账号隔离 + iOS 菜单修复）**：bump 0.3.1→0.3.2（tauri.conf/package.json/Cargo.toml/Cargo.lock/iOS Info.plist）+ CHANGELOG，推 tag v0.3.2 触发三端协调发布**全绿**——release-desktop（Win exe + Mac dmg → GitHub Release）+ release-ios（TestFlight 0.3.2）+ CI 均 success。含方案 A 多账号本地隔离（MA-1~7）+ iOS 书卡 ⋯ 菜单出屏/toggle 修复。**待用户双端端到端复验**多账号故障链（A 加书→删→登出→登录 B→加同书→打开正常+正确上传+无 404）。
 - **2026-07-24（多账号隔离 Phase ② 切换协调+修复：MA-4~7 代码+单测）**：让账号切换无需重启并根治删后重加/切号打开报错。MA-4：`sync_runtime` 加 `SwitchAccount{db_path}` 命令（engine_loop 的 db/base_dir 改 mut，收到即重开连接+重设 busy_timeout+重算 base）；SignIn/SignUp reply 由 `Result<(),String>` 改为回传 `user_id`（加 `request_auth`）；**关键竞态修复**——把「登录后立即同步」的 pending 触发从 SignIn 挪到 SwitchAccount，否则引擎会在旧库上用新会话同步、把新账号云数据灌进旧库。MA-5：`lib.rs` sign-in/up/out/delete 改为编排——`switch_active_account(app,state,sync,key)`：`open_account_at` 新账号目录→asset scope 白名单→替换 `AppState.active`（锁不跨 request 持有）→发 SwitchAccount 切引擎→emit `library-changed`；登出/删号切回 anonymous。MA-6：`Library.tsx` 监听 `library-changed`→reload+refreshSyncStatus。MA-7：`revive_deleted_book_record` 复活时重置 `current_page=1/synced_at=0/cloud_state='local'`（否则旧进度复活+文件不重传），更新单测钉住。clippy 零警告、cargo test 52 passed、tsc/vite build 干净。**端到端待用户双端复验**（A 加书→删→切 B→重加→打开正常+正确上传+无 404；需重新出包）。CI 三 job 全绿（[run 30223429148](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/30223429148)）；随 v0.3.2 出包。
