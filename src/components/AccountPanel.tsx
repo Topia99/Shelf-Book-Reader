@@ -5,6 +5,7 @@ import {
   syncDeleteAccount,
   syncGetQuota,
   syncNow,
+  syncRefreshNow,
   syncSignIn,
   syncSignOut,
   syncSignUp,
@@ -162,7 +163,7 @@ export default function AccountPanel({ open, status, onClose, onRefreshStatus }:
     setSubmitting(true);
     setError("");
     try {
-      await syncNow();
+      await syncRefreshNow(); // 立即强制同步一轮（跳过防抖/30s 间隔），完成才返回
       await onRefreshStatus();
     } catch (e) {
       setError(getErrorMessage(e));

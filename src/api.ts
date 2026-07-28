@@ -68,6 +68,9 @@ export const syncStatus = () => invoke<SyncStatus>("sync_status");
 
 export const syncNow = () => invoke<void>("sync_now");
 
+/** 立即强制同步一轮并等待完成（下拉刷新 / 立刻同步）：跳过防抖与 30s 间隔 */
+export const syncRefreshNow = () => invoke<void>("sync_refresh_now");
+
 /** 按需下载云端书籍文件本体（点开 remote 书时调用），完成后本机即有文件可打开 */
 export const syncDownloadBook = (hash: string) =>
   invoke<void>("sync_download_book", { hash });

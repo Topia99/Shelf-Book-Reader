@@ -344,8 +344,9 @@ fn list_books_in_db(
     let order = match sort {
         "added" => "added_at DESC, id DESC",
         "title" => "title COLLATE NOCASE ASC",
-        // 默认：最近阅读（没读过的排后面，按添加时间）
-        _ => "last_opened_at IS NULL, last_opened_at DESC, added_at DESC",
+        // 默认：最近阅读。没打开过的书（含云端刚下载）用 added_at 兜底排进来，
+        // 而非沉到最底部——否则新下载/未读的书像是"不显示"（真排序，非过滤）
+        _ => "COALESCE(last_opened_at, added_at) DESC, id DESC",
     };
     let sql = format!(
         "SELECT {BOOK_COLS} FROM books WHERE deleted = 0 AND title LIKE ?1 ORDER BY {order}"
@@ -491,6 +492,15 @@ fn sync_status(sync: State<sync_runtime::SyncHandle>) -> sync_runtime::SyncStatu
 #[tauri::command]
 fn sync_now(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
     sync.send(sync_runtime::SyncCommand::SyncNow)
+}
+
+/// 立即强制同步一轮并等待完成（下拉刷新 / 立刻同步）：跳过防抖与 30s 间隔，最长等 60 秒。
+#[tauri::command]
+fn sync_refresh_now(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
+    sync.request_with_timeout(
+        |reply| sync_runtime::SyncCommand::RefreshNow { reply },
+        60,
+    )
 }
 
 /// 按需下载 remote 书文件本体（用户点开云端书时调用，最长等 180 秒）。
@@ -1085,6 +1095,31 @@ mod tests {
     }
 
     #[test]
+    fn recent_sort_places_never_opened_by_added_time() {
+        let db = memory_library_db();
+        // 读过的旧书：last_opened 较早
+        let opened = insert_test_book(&db, "aaa", "读过的旧书");
+        db.execute(
+            "UPDATE books SET added_at='2026-01-01', last_opened_at='2026-06-01' WHERE id=?1",
+            [opened],
+        )
+        .unwrap();
+        // 从没打开过、但刚下载（added_at 更晚）的云端书
+        let fresh = insert_test_book(&db, "bbb", "刚下载未读");
+        db.execute(
+            "UPDATE books SET added_at='2026-07-20', last_opened_at=NULL WHERE id=?1",
+            [fresh],
+        )
+        .unwrap();
+
+        let base = std::env::temp_dir();
+        let books = list_books_in_db(&db, &base, "recent", "").unwrap();
+        // 真排序：未读但更晚添加的书排在前，不再沉底
+        assert_eq!(books[0].hash, "bbb");
+        assert_eq!(books[1].hash, "aaa");
+    }
+
+    #[test]
     fn tombstoned_book_is_hidden_from_list_books() {
         let db = memory_library_db();
         let id = insert_test_book(&db, "deadbeef", "墓碑书");
@@ -1421,6 +1456,7 @@ pub fn run() {
             sync_delete_account,
             sync_status,
             sync_now,
+            sync_refresh_now,
             sync_download_book,
             sync_get_quota,
             get_sync_settings,

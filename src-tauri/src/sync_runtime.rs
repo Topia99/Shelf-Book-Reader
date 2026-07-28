@@ -78,6 +78,11 @@ pub(crate) enum SyncCommand {
     },
     /// 请求一次同步（防抖合并，可安全高频发送）
     SyncNow,
+    /// 立即强制同步一轮并回执（下拉刷新 / 立刻同步用）：跳过防抖与 30s 最小间隔，
+    /// 完成才回执，前端据此收起刷新指示并重载书库。未登录则立即回 Ok（本地无可抓）。
+    RefreshNow {
+        reply: Sender<Result<(), String>>,
+    },
 }
 
 /// 暴露给前端的同步状态快照。
@@ -356,6 +361,33 @@ fn engine_loop(
                         .unwrap_or_else(Instant::now);
                     let target = (Instant::now() + DEBOUNCE).max(earliest);
                     pending = Some(pending.map_or(target, |p| p.min(target).max(earliest)));
+                }
+            }
+            Ok(SyncCommand::RefreshNow { reply }) => {
+                if !status.lock().unwrap().signed_in {
+                    let _ = reply.send(Ok(())); // 未登录：本地库无云可抓，直接成功
+                } else {
+                    update_status(&app, &status, |s| s.syncing = true);
+                    let result = run_cycle(&db, &mut backend, &base_dir).map_err(|e| e.to_string());
+                    match &result {
+                        Ok(()) => {
+                            failures = 0;
+                            pending = None;
+                            last_run = Some(Instant::now());
+                            update_status(&app, &status, |s| {
+                                s.syncing = false;
+                                s.last_sync_ms = Some(crate::now_ms());
+                                s.last_error = None;
+                            });
+                        }
+                        Err(e) => {
+                            update_status(&app, &status, |s| {
+                                s.syncing = false;
+                                s.last_error = Some(e.clone());
+                            });
+                        }
+                    }
+                    let _ = reply.send(result);
                 }
             }
             Err(RecvTimeoutError::Disconnected) => break, // 应用退出

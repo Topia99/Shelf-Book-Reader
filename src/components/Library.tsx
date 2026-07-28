@@ -10,6 +10,7 @@ import {
   saveCover,
   setTotalPages,
   syncDownloadBook,
+  syncRefreshNow,
   syncStatus,
   takeOpenedUrls,
   type Book,
@@ -79,6 +80,11 @@ export default function Library({ onOpenBook }: Props) {
   const [notices, setNotices] = useState<Notice[]>([]);
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
   const ctxMenuRef = useRef<HTMLDivElement>(null);
+  // 下拉刷新（仅触屏）：滚动到顶再下拉→强制抓云→重载书库
+  const gridRef = useRef<HTMLDivElement>(null);
+  const pullStartRef = useRef<number | null>(null);
+  const [pullY, setPullY] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const [renaming, setRenaming] = useState<Book | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<Book | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -110,6 +116,47 @@ export default function Library({ onOpenBook }: Props) {
     setNotices((ns) => [...ns, { kind, text }]);
     // 5 秒后自动消失
     setTimeout(() => setNotices((ns) => ns.slice(1)), 5000);
+  }
+
+  // ---- 下拉刷新（触屏）----
+  const PULL_TRIGGER = 56; // 松手触发刷新的下拉位移阈值（已阻尼后的显示位移）
+  async function doRefresh() {
+    setRefreshing(true);
+    setPullY(0);
+    try {
+      await syncRefreshNow(); // 强制抓云一轮（跳过防抖/间隔），完成才返回
+    } catch (e) {
+      pushNotice("error", `刷新失败：${String(e)}`);
+    }
+    try {
+      await reload(); // 把新拉到的书刷进"最近阅读"页面（无需切换排序）
+    } catch (e) {
+      pushNotice("error", String(e));
+    }
+    refreshSyncStatus().catch(() => {});
+    setRefreshing(false);
+  }
+  function onGridTouchStart(e: React.TouchEvent) {
+    if (!isTouchDevice || refreshing) return;
+    const el = gridRef.current;
+    pullStartRef.current = el && el.scrollTop <= 0 ? e.touches[0].clientY : null;
+  }
+  function onGridTouchMove(e: React.TouchEvent) {
+    if (pullStartRef.current == null || refreshing) return;
+    const dy = e.touches[0].clientY - pullStartRef.current;
+    if (dy > 0) {
+      setPullY(Math.min(dy * 0.5, 80)); // 阻尼 + 封顶，避免拉过头
+    } else {
+      pullStartRef.current = null;
+      setPullY(0);
+    }
+  }
+  function onGridTouchEnd() {
+    if (pullStartRef.current == null) return;
+    const trigger = pullY >= PULL_TRIGGER;
+    pullStartRef.current = null;
+    if (trigger) doRefresh();
+    else setPullY(0);
   }
 
   /** 入库后处理：提取元数据书名、总页数、封面。加密/损坏的 PDF 静默降级为默认封面。 */
@@ -493,8 +540,33 @@ export default function Library({ onOpenBook }: Props) {
           </button>
         </div>
       ) : (
-        <div className="book-grid">
-          {books.map((book) => (
+        <div className="book-grid-wrap">
+          <div
+            className={"pull-refresh" + (refreshing ? " spinning" : "")}
+            style={{
+              transform: `translate(-50%, ${refreshing ? 12 : pullY - 24}px)`,
+              opacity: refreshing ? 1 : Math.min(pullY / PULL_TRIGGER, 1),
+            }}
+            aria-hidden={!refreshing && pullY === 0}
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20">
+              <path
+                d="M12 4a8 8 0 1 1-7.4 5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+              />
+            </svg>
+          </div>
+          <div
+            className="book-grid"
+            ref={gridRef}
+            onTouchStart={onGridTouchStart}
+            onTouchMove={onGridTouchMove}
+            onTouchEnd={onGridTouchEnd}
+          >
+            {books.map((book) => (
             <div
               key={book.id}
               className="book-card"
@@ -569,7 +641,8 @@ export default function Library({ onOpenBook }: Props) {
                 </span>
               </div>
             </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 
