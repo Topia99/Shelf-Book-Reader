@@ -5,7 +5,7 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-24（下拉刷新流畅化：阻塞命令移出主线程 + 橡皮筋阻尼 + 转轮保底）
+**最后更新**：2026-07-24（v0.3.6 出包：下拉刷新流畅化三端发布全绿，待真机手感验）
 **当前阶段**：阶段 4 基本收尾——iOS 真机通过 ✅、P4-6~8 ✅、P4-9 内存初筛通过（待真机复核）🔄、**P4-10 TestFlight 流水线完成** ✅（本地+GitHub Actions 双路径端到端验证，tag→自动发布）；剩余：P4-11 邀测试员（用户，教程已给）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ✅（本地+CI 双发布路径打通，2 个构建在 TestFlight，就差用户邀测试员 P4-11）｜M4 商店上线 ⏳
 
@@ -144,6 +144,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-24（v0.3.6 出包：下拉刷新流畅化）**：三端协调发布**全绿**——release-desktop（Win exe + Mac dmg → [GitHub Release](https://github.com/Topia99/Shelf-Book-Reader/releases/tag/v0.3.6)）+ release-ios（TestFlight 0.3.6）均 success。含封面跟手 + 橡皮筋阻尼 + 主线程隔离（7 命令改 async）+ 转轮保底。**版本号踩坑**：v0.3.5 早前已发布（仅含封面跟手，指向 d49e40e），本批改用 v0.3.6 避免覆盖；bump Cargo.lock 时全局 sed 误伤 dtoa-short 依赖版本，checkout 还原后按行号精确改 shelf 行修正。**待用户真机验手感**：下拉跟手/橡皮筋/刷新不卡/下载不冻。
 - **2026-07-24（下拉刷新流畅化：主线程隔离 + 橡皮筋 + 转轮保底）**：用户反馈下拉刷新不流畅——① 下滑到 ~80px 硬封顶后无响应；② 松手刷新时 UI 卡死 1–2 秒、转轮闪一下就消失。**关键根因**：`sync_refresh_now` 是同步 `#[tauri::command]`，Tauri 同步命令默认在 WebView 主线程执行，其内部阻塞等 `run_cycle`（网络 1–2s）把主线程占满 → 动画/滚动全冻。三处修复：**A 主线程隔离**——把 7 个阻塞等引擎回执的命令（sync_refresh_now/download_book/sign_in/up/out/delete_account/get_quota）从 `#[tauri::command]` 改 `#[tauri::command(async)]`，Tauri 丢独立线程跑，主线程不再被网络等待占用；**B 橡皮筋阻尼**——`onGridTouchMove` 的 `Math.min(dy*0.5, 80)` 硬封顶换成 `64*log1p(dy/64)`（单调跟手、越拉增量越小、无上限）；**C 转轮保底**——`doRefresh` 用 `Promise.all([syncRefreshNow(), sleep(800)])` 保底转一整圈再收，配合 A 主线程空闲让 CSS 动画顺滑。clippy 净、cargo test 53 passed、tsc/vite build 干净。**真机手感待用户确认**（触屏）。CI 三 job 全绿（[run 30422687289](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/30422687289)）。
 - **2026-07-24（修下拉刷新封面不跟手）**：用户真机反馈——v0.3.4 删书清云端 + 配额回落已验证通过 ✅；下拉刷新时只有 spinner 跟手位移、封面网格不动。根因：`.book-grid`（滚动容器）未绑 `pullY` 的 transform。修复=给 `.book-grid` 加内联 `transform: translateY(refreshing?40:pullY)`（随下拉跟手、刷新时停 40px 给 spinner 让位）+ `transition`（拖动中 none 保 1:1 跟手，松手/刷新中 0.25s ease 平滑回弹）。仅 Library.tsx 该 div，手势逻辑/CSS 结构不动、桌面无触屏不受影响。tsc/vite build 干净。**真机手感待用户确认**（触屏，随下个包验）。CI 三 job 全绿（[run 30420392516](https://github.com/Topia99/Shelf-Book-Reader/actions/runs/30420392516)）。
 - **2026-07-24（v0.3.4 出包：删书清云端 R2）**：用户部署 `supabase functions deploy sign-url` 成功（delete op 上线），bump 0.3.3→0.3.4 + CHANGELOG，推 tag v0.3.4 触发三端协调发布**全绿**——release-desktop（Win exe + Mac dmg → GitHub Release）+ release-ios（TestFlight 0.3.4）均 success。MA-8 关闭 ✅。**待用户新包真机验**：登录删已同步书→云端 R2 pdf+封面消失 + 配额回落 + 另端不再见此书。
