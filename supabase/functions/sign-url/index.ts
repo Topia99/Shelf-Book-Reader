@@ -1,6 +1,7 @@
 /**
  * sign-url Edge Function 协议摘要：
- * - POST JSON: { op: "put" | "get", key: "books/<sha256>.pdf" | "covers/<sha256>.jpg", bytes?: number }
+ * - POST JSON: { op: "put" | "get" | "delete", key: "books/<sha256>.pdf" | "covers/<sha256>.jpg", bytes?: number }
+ *   - delete：签发预签名 DELETE，并在删除前 HEAD 取对象大小回扣 user_quota.bytes_used（best-effort，幂等）
  * - 200: { url: string, expires_at: number }
  * - 401: JWT 缺失或无效
  * - 403: key 形态非法
@@ -23,7 +24,7 @@ const BOOK_KEY_RE = /^books\/[0-9a-f]{64}\.pdf$/;
 const COVER_KEY_RE = /^covers\/[0-9a-f]{64}\.jpg$/;
 
 type RequestBody = {
-  op?: "put" | "get";
+  op?: "put" | "get" | "delete";
   key?: string;
   bytes?: number;
 };
@@ -69,7 +70,7 @@ async function buildSignedUrl(params: {
   accountId: string;
   bucket: string;
   fullKey: string;
-  method: "PUT" | "GET";
+  method: "PUT" | "GET" | "DELETE";
   awsClient: AwsClient;
 }): Promise<string> {
   const url = new URL(
@@ -146,7 +147,7 @@ Deno.serve(async (request) => {
     }
 
     const { op, key, bytes } = body;
-    if ((op !== "put" && op !== "get") || typeof key !== "string") {
+    if ((op !== "put" && op !== "get" && op !== "delete") || typeof key !== "string") {
       return jsonResponse(400, { error: "Invalid op or key" });
     }
 
@@ -208,12 +209,39 @@ Deno.serve(async (request) => {
       region: "auto",
     });
 
+    if (op === "delete") {
+      // 删除前 HEAD 取对象大小回扣配额（best-effort：对象不存在/失败则回扣 0，对账任务兜底）
+      try {
+        const objectUrl =
+          `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${fullKey}`;
+        const signedHead = await awsClient.sign(objectUrl, { method: "HEAD" });
+        const headResp = await fetch(signedHead);
+        const size = headResp.ok
+          ? parseInt(headResp.headers.get("content-length") ?? "0", 10) || 0
+          : 0;
+        if (size > 0) {
+          const { data: quotaData } = await serviceClient
+            .from("user_quota")
+            .select("bytes_used")
+            .eq("user_id", user.id)
+            .maybeSingle();
+          const used = (quotaData as { bytes_used: number } | null)?.bytes_used ?? 0;
+          await serviceClient
+            .from("user_quota")
+            .update({ bytes_used: Math.max(0, used - size) })
+            .eq("user_id", user.id);
+        }
+      } catch {
+        // 配额回扣失败不阻塞删除
+      }
+    }
+
     const expiresAt = Date.now() + SIGN_EXPIRES_SECONDS * 1000;
     const url = await buildSignedUrl({
       accountId,
       bucket,
       fullKey,
-      method: op === "put" ? "PUT" : "GET",
+      method: op === "put" ? "PUT" : op === "delete" ? "DELETE" : "GET",
       awsClient,
     });
 

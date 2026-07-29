@@ -456,6 +456,11 @@ fn run_cycle(
         backend.push_progress(&progress)?;
         // synced_at 用行自身的 updated_at：推送后到现在之间的新写入仍保持脏状态
         for book in &books {
+            // 墓碑：删除云端 R2 文件与封面对象（best-effort，失败不阻塞元数据同步）。
+            // 幂等（R2 DELETE 不存在对象返回 204），失败则文件暂留，与旧行为无差。
+            if book.deleted {
+                let _ = backend.delete_book_file(&book.sha256);
+            }
             sync_engine::mark_synced(db, std::slice::from_ref(&book.sha256), book.updated_at)
                 .map_err(db_err)?;
         }

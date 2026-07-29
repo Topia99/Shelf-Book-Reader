@@ -407,6 +407,35 @@ impl SupabaseBackend {
         Ok(format!("covers/{sha256}.jpg"))
     }
 
+    /// 签发预签名 DELETE URL（内部辅助，供 delete_book_file 用）。
+    fn sign_delete_url(&self, object_key: &str) -> Result<SignedUrl, SyncError> {
+        let request = self.apply_auth(
+            self.client
+                .post(self.function_url("/sign-url"))
+                .json(&json!({ "op": "delete", "key": object_key })),
+        )?;
+
+        let payload: SignedUrlResponse = self.send_json_with_mapper(request, map_sign_url_error)?;
+        payload.try_into_signed_url()
+    }
+
+    /// 删除云端 R2 上的书籍文件与封面对象（墓碑同步后清理）。
+    /// sign-url 函数 delete 分支会 HEAD 取大小回扣配额；R2 对已不存在的对象 DELETE 返回 204，天然幂等。
+    pub(crate) fn delete_book_file(&self, sha256: &str) -> Result<(), SyncError> {
+        for key in [self.book_object_key(sha256)?, self.cover_object_key(sha256)?] {
+            let signed = self.sign_delete_url(&key)?;
+            let resp = self
+                .client
+                .delete(&signed.url)
+                .send()
+                .map_err(|e| SyncError::Network(format!("R2 删除失败：{e}")))?;
+            if !resp.status().is_success() && resp.status() != StatusCode::NOT_FOUND {
+                return Err(SyncError::Network(format!("R2 删除返回 {}", resp.status())));
+            }
+        }
+        Ok(())
+    }
+
     /// 上传封面缩略图到 R2 并回填云端 books.cover_key。
     pub(crate) fn upload_cover_file(&self, sha256: &str, bytes: &[u8]) -> Result<(), SyncError> {
         let key = self.cover_object_key(sha256)?;

@@ -371,16 +371,25 @@ fn list_books(sort: String, query: String, state: State<AppState>) -> Result<Vec
 }
 
 #[tauri::command]
-fn remove_book(id: i64, state: State<AppState>) -> Result<(), String> {
-    let active = state.active.lock().unwrap();
-    let db = &active.db;
-    let book = get_book_by_id(db, id)?;
-    tombstone_book(db, id)?;
-    // 删除书库副本与封面缓存；文件删除失败不阻塞（记录已移除）
-    let _ = fs::remove_file(to_abs(&active.base_dir, &book.file_path));
-    if let Some(cover) = &book.cover_path {
-        let _ = fs::remove_file(to_abs(&active.base_dir, cover));
+fn remove_book(
+    id: i64,
+    state: State<AppState>,
+    sync: State<sync_runtime::SyncHandle>,
+) -> Result<(), String> {
+    {
+        let active = state.active.lock().unwrap();
+        let db = &active.db;
+        let book = get_book_by_id(db, id)?;
+        tombstone_book(db, id)?;
+        // 删除书库副本与封面缓存；文件删除失败不阻塞（记录已移除）
+        let _ = fs::remove_file(to_abs(&active.base_dir, &book.file_path));
+        if let Some(cover) = &book.cover_path {
+            let _ = fs::remove_file(to_abs(&active.base_dir, cover));
+        }
     }
+    // 主动推送墓碑：登录时删除立刻上云（deleted=true），另一端拉取即隐藏；
+    // 引擎侧删除对应 R2 文件对象。未登录/失败均不影响本地删除（下轮再推）。
+    let _ = sync.send(sync_runtime::SyncCommand::SyncNow);
     Ok(())
 }
 
