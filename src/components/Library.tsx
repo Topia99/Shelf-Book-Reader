@@ -43,6 +43,8 @@ const SORT_LABELS: Record<SortKey, string> = {
   title: "书名",
 };
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 export default function Library({ onOpenBook }: Props) {
   /** 点开云端书（remote）：按需下载文件本体，完成后打开；已在下载则忽略重复点击 */
   async function tryOpenBook(book: Book) {
@@ -123,16 +125,14 @@ export default function Library({ onOpenBook }: Props) {
   async function doRefresh() {
     setRefreshing(true);
     setPullY(0);
-    try {
-      await syncRefreshNow(); // 强制抓云一轮（跳过防抖/间隔），完成才返回
-    } catch (e) {
-      pushNotice("error", `刷新失败：${String(e)}`);
-    }
-    try {
-      await reload(); // 把新拉到的书刷进"最近阅读"页面（无需切换排序）
-    } catch (e) {
-      pushNotice("error", String(e));
-    }
+    // 后台抓云与"保底转一圈"并行：syncRefreshNow 已是 (async) 命令跑在独立线程，
+    // 主线程空闲让转轮平滑旋转；至少 800ms（一整圈）避免"闪一下就没"。
+    const sync = syncRefreshNow().catch((e) =>
+      pushNotice("error", `刷新失败：${String(e)}`)
+    );
+    await Promise.all([sync, sleep(800)]);
+    // 把新拉到的书刷进"最近阅读"页面（无需切换排序）
+    await reload().catch((e) => pushNotice("error", String(e)));
     refreshSyncStatus().catch(() => {});
     setRefreshing(false);
   }
@@ -145,7 +145,8 @@ export default function Library({ onOpenBook }: Props) {
     if (pullStartRef.current == null || refreshing) return;
     const dy = e.touches[0].clientY - pullStartRef.current;
     if (dy > 0) {
-      setPullY(Math.min(dy * 0.5, 80)); // 阻尼 + 封顶，避免拉过头
+      // 橡皮筋阻尼：位移随手指单调增、越拉增量越小、无硬上限（始终跟手）
+      setPullY(64 * Math.log1p(dy / 64));
     } else {
       pullStartRef.current = null;
       setPullY(0);

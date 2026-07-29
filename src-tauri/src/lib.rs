@@ -441,7 +441,8 @@ fn switch_active_account(
     Ok(())
 }
 
-#[tauri::command]
+// (async)：阻塞等引擎回执，必须移出 WebView 主线程，否则登录期间 UI 冻结
+#[tauri::command(async)]
 fn sync_sign_in(
     email: String,
     password: String,
@@ -457,7 +458,7 @@ fn sync_sign_in(
     switch_active_account(&app, &state, &sync, &user_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sync_sign_up(
     email: String,
     password: String,
@@ -473,7 +474,7 @@ fn sync_sign_up(
     switch_active_account(&app, &state, &sync, &user_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sync_sign_out(
     app: tauri::AppHandle,
     state: State<AppState>,
@@ -483,7 +484,7 @@ fn sync_sign_out(
     switch_active_account(&app, &state, &sync, ANONYMOUS_KEY)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sync_delete_account(
     app: tauri::AppHandle,
     state: State<AppState>,
@@ -504,7 +505,8 @@ fn sync_now(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
 }
 
 /// 立即强制同步一轮并等待完成（下拉刷新 / 立刻同步）：跳过防抖与 30s 间隔，最长等 60 秒。
-#[tauri::command]
+/// (async)：阻塞等 run_cycle（网络）完成，必须移出主线程，否则刷新期间 UI 冻结。
+#[tauri::command(async)]
 fn sync_refresh_now(sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
     sync.request_with_timeout(
         |reply| sync_runtime::SyncCommand::RefreshNow { reply },
@@ -513,7 +515,8 @@ fn sync_refresh_now(sync: State<sync_runtime::SyncHandle>) -> Result<(), String>
 }
 
 /// 按需下载 remote 书文件本体（用户点开云端书时调用，最长等 180 秒）。
-#[tauri::command]
+/// (async)：阻塞下载，必须移出主线程，否则下载期间 UI 长时间冻结。
+#[tauri::command(async)]
 fn sync_download_book(hash: String, sync: State<sync_runtime::SyncHandle>) -> Result<(), String> {
     sync.request_with_timeout(
         move |reply| sync_runtime::SyncCommand::DownloadBook { hash, reply },
@@ -521,7 +524,7 @@ fn sync_download_book(hash: String, sync: State<sync_runtime::SyncHandle>) -> Re
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn sync_get_quota(
     sync: State<sync_runtime::SyncHandle>,
 ) -> Result<crate::sync::QuotaInfo, String> {
