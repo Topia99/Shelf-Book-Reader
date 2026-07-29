@@ -1,7 +1,7 @@
 # PROJECT.md — Shelf 全平台阅读器 · 项目主文档
 
 > 本文件是项目的唯一交接入口：新会话仅凭此文件即可完全接手。
-> 细节文档索引：[全平台开发文档.md](全平台开发文档.md)（架构/成本设计）、[implementation_plan.md](implementation_plan.md)（原子任务定义与验收标准）、[progress.md](progress.md)（实时看板，**开工前必读**）、[docs/IOSUI_验收标准.md](docs/IOSUI_验收标准.md)、[docs/真机安装测试步骤.md](docs/真机安装测试步骤.md)、[docs/跨平台审计清单.md](docs/跨平台审计清单.md)、[fixedbug.md](fixedbug.md)（真机联调 bug 修复记录）、[docs/多账号本地隔离设计.md](docs/多账号本地隔离设计.md)（同设备多账号本地/云端隔离方案 A · MA-1~9）。
+> 细节文档索引：[全平台开发文档.md](全平台开发文档.md)（架构/成本设计）、[implementation_plan.md](implementation_plan.md)（原子任务定义与验收标准）、[progress.md](progress.md)（实时看板，**开工前必读**）、[docs/IOSUI_验收标准.md](docs/IOSUI_验收标准.md)、[docs/真机安装测试步骤.md](docs/真机安装测试步骤.md)、[docs/跨平台审计清单.md](docs/跨平台审计清单.md)、[fixedbug.md](fixedbug.md)（真机联调 bug 修复记录）、[docs/多账号本地隔离设计.md](docs/多账号本地隔离设计.md)（同设备多账号本地/云端隔离方案 A · MA-1~9）、[docs/bug修复工作流prompt.md](docs/bug修复工作流prompt.md)（新对话处理 bug 的可复用 prompt，遇 bug 贴给新窗口即可）。
 > 最后更新：2026-07-24
 
 ---
