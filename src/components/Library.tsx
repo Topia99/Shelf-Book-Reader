@@ -565,6 +565,12 @@ export default function Library({ onOpenBook }: Props) {
             onTouchStart={onGridTouchStart}
             onTouchMove={onGridTouchMove}
             onTouchEnd={onGridTouchEnd}
+            style={{
+              // 封面网格随下拉跟手位移；刷新时停 40px 给 spinner 让位
+              transform: `translateY(${refreshing ? 40 : pullY}px)`,
+              // 拖动中关过渡=1:1 跟手；松手/刷新中开过渡=平滑回弹
+              transition: pullY > 0 && !refreshing ? "none" : "transform 0.25s ease",
+            }}
           >
             {books.map((book) => (
             <div

@@ -5,7 +5,7 @@
 > 任务定义与验收标准见 [implementation_plan.md](implementation_plan.md)，架构与决策见 [全平台开发文档.md](全平台开发文档.md)。
 > 状态：✅ 完成（已验收）｜🔄 进行中｜⏳ 待开始｜🚫 被依赖阻塞｜⛔ 验收打回
 
-**最后更新**：2026-07-24（v0.3.4 出包：删书清云端 R2 + 回扣配额，Edge Function 已部署，三端发布全绿，待真机验）
+**最后更新**：2026-07-24（修下拉刷新封面不跟手；v0.3.4 删书清云端已真机验证通过）
 **当前阶段**：阶段 4 基本收尾——iOS 真机通过 ✅、P4-6~8 ✅、P4-9 内存初筛通过（待真机复核）🔄、**P4-10 TestFlight 流水线完成** ✅（本地+GitHub Actions 双路径端到端验证，tag→自动发布）；剩余：P4-11 邀测试员（用户，教程已给）、桌面端人工回归清单（用户）、P4-9 真机 Instruments 复核（用户）
 **里程碑**：M1 Mac 版可用 🔄（开发完，待人工走查）｜M2 双端接着读 🔄（书目同步已实证，进度互通待验）｜M3 TestFlight 可分享 ✅（本地+CI 双发布路径打通，2 个构建在 TestFlight，就差用户邀测试员 P4-11）｜M4 商店上线 ⏳
 
@@ -144,6 +144,7 @@
 
 ## 执行日志（倒序）
 
+- **2026-07-24（修下拉刷新封面不跟手）**：用户真机反馈——v0.3.4 删书清云端 + 配额回落已验证通过 ✅；下拉刷新时只有 spinner 跟手位移、封面网格不动。根因：`.book-grid`（滚动容器）未绑 `pullY` 的 transform。修复=给 `.book-grid` 加内联 `transform: translateY(refreshing?40:pullY)`（随下拉跟手、刷新时停 40px 给 spinner 让位）+ `transition`（拖动中 none 保 1:1 跟手，松手/刷新中 0.25s ease 平滑回弹）。仅 Library.tsx 该 div，手势逻辑/CSS 结构不动、桌面无触屏不受影响。tsc/vite build 干净。**真机手感待用户确认**（触屏，随下个包验）。CI 待推送验证。
 - **2026-07-24（v0.3.4 出包：删书清云端 R2）**：用户部署 `supabase functions deploy sign-url` 成功（delete op 上线），bump 0.3.3→0.3.4 + CHANGELOG，推 tag v0.3.4 触发三端协调发布**全绿**——release-desktop（Win exe + Mac dmg → GitHub Release）+ release-ios（TestFlight 0.3.4）均 success。MA-8 关闭 ✅。**待用户新包真机验**：登录删已同步书→云端 R2 pdf+封面消失 + 配额回落 + 另端不再见此书。
 - **2026-07-24（MA-8 删书清云端 R2）**：用户反馈账号里删书后云端仍在。根因：`remove_book` 只删本地文件+墓碑，`run_cycle` 推墓碑元数据（云端行 deleted=true）但从不删 R2 对象 → 文件与封面残留、配额不回扣。修复：① `remove_book` 加 `State<SyncHandle>`，墓碑后发 `SyncNow` 立即推送（登录时删除即时上云）；② `run_cycle` push 墓碑时对 `deleted` 行调 `backend.delete_book_file(sha256)`（best-effort，失败不阻塞元数据同步）；③ `sync_supabase` 加 `sign_delete_url`（inherent）+ `delete_book_file`（删 books/<hash>.pdf 与 covers/<hash>.jpg，DELETE 幂等 204/404 均视为成功）；④ Edge Function `sign-url` 加 `delete` op：HEAD 取对象大小回扣 `user_quota.bytes_used`（best-effort）后签发预签名 DELETE。clippy 净、cargo test 53 passed。**Edge Function 部署被自动模式拦截，待用户部署 `supabase functions deploy sign-url`**（部署前 app 侧 delete 调用返回 400 但 best-effort 无害、无回归）。随 v0.3.4 出包。
 - **2026-07-24（v0.3.3 出包：最近阅读真排序 + 下拉刷新）**：bump 0.3.2→0.3.3 + CHANGELOG，推 tag v0.3.3 触发三端协调发布**全绿**——release-desktop（Win exe + Mac dmg → GitHub Release）+ release-ios（TestFlight 0.3.3）均 success。待用户新包验：云端书是否直接现于「最近阅读」+ 书库触屏下拉刷新手感。
