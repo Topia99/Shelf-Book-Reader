@@ -370,10 +370,14 @@ fn engine_loop(
                     update_status(&app, &status, |s| s.syncing = true);
                     let result = run_cycle(&db, &mut backend, &base_dir).map_err(|e| e.to_string());
                     match &result {
-                        Ok(()) => {
+                        Ok(library_changed) => {
                             failures = 0;
                             pending = None;
                             last_run = Some(Instant::now());
+                            // 后台同步改了本地库（新增/删/改书、下好封面）→ 通知前端重刷（P1-A）
+                            if *library_changed {
+                                let _ = app.emit("library-changed", ());
+                            }
                             update_status(&app, &status, |s| {
                                 s.syncing = false;
                                 s.last_sync_ms = Some(crate::now_ms());
@@ -387,7 +391,8 @@ fn engine_loop(
                             });
                         }
                     }
-                    let _ = reply.send(result);
+                    // reply 只关心成功/失败，丢掉 bool
+                    let _ = reply.send(result.map(|_| ()));
                 }
             }
             Err(RecvTimeoutError::Disconnected) => break, // 应用退出
@@ -398,11 +403,15 @@ fn engine_loop(
                 }
                 update_status(&app, &status, |s| s.syncing = true);
                 match run_cycle(&db, &mut backend, &base_dir) {
-                    Ok(()) => {
+                    Ok(library_changed) => {
                         eprintln!("[sync] 同步周期完成");
                         failures = 0;
                         pending = None;
                         last_run = Some(Instant::now());
+                        // 后台同步改了本地库（新增/删/改书、下好封面）→ 通知前端重刷（P1-A）
+                        if library_changed {
+                            let _ = app.emit("library-changed", ());
+                        }
                         update_status(&app, &status, |s| {
                             s.syncing = false;
                             s.last_sync_ms = Some(crate::now_ms());
@@ -438,11 +447,16 @@ fn engine_loop(
 /// 单次 PUT 上传的文件大小上限（MVP）。>100MB 暂不上传，留待 P5-1b 分片续传。
 const MAX_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
 
+/// 返回本轮是否有「书库视图相关」的本地变更（新增/删除/改名的书、下好的封面）。
+/// 调用方据此 emit `library-changed`，让前端书库响应式重刷（P1-A：组 1 登录后新书/封面
+/// 不显示、组 4a 删的书不消失，根因是后台同步改了本地库但前端不重刷）。进度合并不计入
+/// （翻页频繁、且开书时读 DB 即取最新页），避免书库无谓重载。
 fn run_cycle(
     db: &Connection,
     backend: &mut SupabaseBackend,
     base_dir: &Path,
-) -> Result<(), SyncError> {
+) -> Result<bool, SyncError> {
+    let mut library_changed = false;
     let session = backend.session().ok_or(SyncError::Unauthorized)?;
     if session.expires_at - crate::now_ms() < REFRESH_MARGIN_MS {
         let fresh = backend.refresh()?;
@@ -470,7 +484,9 @@ fn run_cycle(
     let mut cursor = sync_engine::get_cursor(db).map_err(db_err)?;
     for _ in 0..MAX_PULL_PAGES {
         let page = backend.pull_since(cursor.as_deref(), PULL_PAGE_LIMIT)?;
-        sync_engine::merge_remote_books(db, &page.books, crate::now_ms()).map_err(db_err)?;
+        let stats = sync_engine::merge_remote_books(db, &page.books, crate::now_ms()).map_err(db_err)?;
+        // 新增/更新（含墓碑删除翻 deleted）即书库有变；skipped 不算。
+        library_changed |= stats.inserted + stats.updated > 0;
         sync_engine::merge_remote_progress(db, &page.progress).map_err(db_err)?;
         match page.next_cursor {
             Some(next) => {
@@ -490,8 +506,10 @@ fn run_cycle(
 
     // 封面同步（次要，best-effort：失败不影响主流程，下轮重试）
     let _ = upload_pending_covers(db, backend, base_dir);
-    let _ = download_pending_covers(db, backend, base_dir);
-    Ok(())
+    if let Ok(n) = download_pending_covers(db, backend, base_dir) {
+        library_changed |= n > 0;
+    }
+    Ok(library_changed)
 }
 
 /// 读「自动上传文件」开关（sync_meta，缺省=开）。关掉即「仅元数据」模式。
@@ -529,11 +547,13 @@ fn upload_pending_covers(
 }
 
 /// 下载云端封面（cover_key 有、cover_path 空的书）→ 落盘 → 回填 cover_path 供前端显示。
+/// 返回本轮实际落盘的封面数（>0 时调用方 emit library-changed 让书库刷出新封面）。
 fn download_pending_covers(
     db: &Connection,
     backend: &SupabaseBackend,
     base_dir: &Path,
-) -> Result<(), SyncError> {
+) -> Result<usize, SyncError> {
+    let mut downloaded = 0usize;
     for hash in sync_engine::collect_downloadable_covers(db).map_err(db_err)? {
         let Ok(bytes) = backend.download_cover_file(&hash) else {
             continue; // 远端封面尚未就绪或瞬时失败，下轮重试
@@ -545,9 +565,10 @@ fn download_pending_covers(
         }
         if std::fs::write(&abs, &bytes).is_ok() {
             sync_engine::set_cover_path(db, &hash, &rel).map_err(db_err)?;
+            downloaded += 1;
         }
     }
-    Ok(())
+    Ok(downloaded)
 }
 
 /// 上传本机待传书的文件本体（cloud_state='local'）。元数据 push 后云端行已存在，
