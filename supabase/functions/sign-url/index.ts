@@ -1,7 +1,8 @@
 /**
  * sign-url Edge Function 协议摘要：
  * - POST JSON: { op: "put" | "get" | "delete", key: "books/<sha256>.pdf" | "covers/<sha256>.jpg", bytes?: number }
- *   - delete：签发预签名 DELETE，并在删除前 HEAD 取对象大小回扣 user_quota.bytes_used（best-effort，幂等）
+ *   - put：仅校验配额是否会超（不预扣）；实际 bytes_used 由 books 表触发器按真实存储重算
+ *   - delete：仅签发预签名 DELETE 清理 R2 对象；配额回落由 deleted=true 经触发器完成
  * - 200: { url: string, expires_at: number }
  * - 401: JWT 缺失或无效
  * - 403: key 形态非法
@@ -191,15 +192,9 @@ Deno.serve(async (request) => {
         });
       }
 
-      // 简化模型：签发上传 URL 时立即计入配额，后续由对账任务修正未实际落库的差异。
-      const { error: updateError } = await serviceClient
-        .from("user_quota")
-        .update({ bytes_used: quota.bytes_used + uploadBytes })
-        .eq("user_id", user.id);
-
-      if (updateError) {
-        return jsonResponse(400, { error: "Failed to update quota" });
-      }
+      // 只做「会不会超」的检查，不在签名时预扣。实际配额由 books 表触发器
+      // recompute_user_quota 在文件真正落库（PATCH file_key/file_size）后重算，
+      // 保证 bytes_used 恒等于真实存储、幂等自愈（不受签了没传/重试/重传影响）。
     }
 
     const awsClient = new AwsClient({
@@ -209,32 +204,9 @@ Deno.serve(async (request) => {
       region: "auto",
     });
 
-    if (op === "delete") {
-      // 删除前 HEAD 取对象大小回扣配额（best-effort：对象不存在/失败则回扣 0，对账任务兜底）
-      try {
-        const objectUrl =
-          `https://${accountId}.r2.cloudflarestorage.com/${bucket}/${fullKey}`;
-        const signedHead = await awsClient.sign(objectUrl, { method: "HEAD" });
-        const headResp = await fetch(signedHead);
-        const size = headResp.ok
-          ? parseInt(headResp.headers.get("content-length") ?? "0", 10) || 0
-          : 0;
-        if (size > 0) {
-          const { data: quotaData } = await serviceClient
-            .from("user_quota")
-            .select("bytes_used")
-            .eq("user_id", user.id)
-            .maybeSingle();
-          const used = (quotaData as { bytes_used: number } | null)?.bytes_used ?? 0;
-          await serviceClient
-            .from("user_quota")
-            .update({ bytes_used: Math.max(0, used - size) })
-            .eq("user_id", user.id);
-        }
-      } catch {
-        // 配额回扣失败不阻塞删除
-      }
-    }
+    // 删除不再在此回扣配额：删除的书会以 deleted=true 推到 books 表，
+    // 触发器据此把它从 bytes_used 的求和中排除，自动回落（幂等、准确）。
+    // 本分支只负责签发预签名 DELETE 让客户端清理 R2 对象。
 
     const expiresAt = Date.now() + SIGN_EXPIRES_SECONDS * 1000;
     const url = await buildSignedUrl({

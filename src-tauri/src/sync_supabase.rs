@@ -1059,6 +1059,91 @@ mod tests {
         eprintln!("[test] 封面下载校验通过：{} 字节，内容一致 ✓", got_cover.len());
     }
 
+    /// P5-4 配额记账正确性：注册全新账号（干净基线），跑 5 个曾出问题的场景，
+    /// 每步比对「实测配额 vs 期望」。期望值按「按实际存的文件大小之和」的正确模型算。
+    /// 改前：预扣式计数 → 多个场景实测虚高（红）；改后：触发器重算 → 全部相符（绿）。
+    #[test]
+    #[ignore]
+    fn quota_accounting_five_scenarios() {
+        use super::SupabaseBackend;
+        use crate::sync::{CloudBook, SyncBackend};
+
+        let url = std::env::var("SHELF_SUPABASE_URL").expect("SHELF_SUPABASE_URL");
+        let key = std::env::var("SHELF_SUPABASE_ANON_KEY").expect("SHELF_SUPABASE_ANON_KEY");
+
+        let mut backend = SupabaseBackend::new(url, key);
+        // 全新账号 → 干净配额基线（不受历史测试污染）
+        let email = format!("shelf-quota-{}@gmail.com", crate::now_ms());
+        let password = format!("Qt-{}-pw!", crate::now_ms());
+        backend.sign_up(&email, &password).expect("注册失败");
+        eprintln!("[quota-test] 全新账号 {email}");
+
+        let used = |b: &SupabaseBackend| b.get_quota().expect("get_quota").bytes_used;
+
+        // 书 A：文件 + 封面
+        let data_a = b"quota scenario file A payload -- fixed length bytes".to_vec();
+        let hash_a = crate::sha256_of_bytes(&data_a);
+        let cover_a = b"\xff\xd8\xff\xe0 cover A jpeg-ish bytes".to_vec();
+        let flen = data_a.len() as i64;
+        let mk_book = |deleted: bool| CloudBook {
+            sha256: hash_a.clone(),
+            title: "配额测试书A".into(),
+            author: None,
+            page_count: None,
+            file_size: flen,
+            cover_key: None,
+            file_key: None,
+            updated_at: crate::now_ms(),
+            deleted,
+        };
+
+        // 收集 (场景名, 实测, 期望)，跑完统一打印+断言（不中途停，好看到全部 5 个）
+        let mut results: Vec<(&str, i64, i64)> = Vec::new();
+
+        results.push(("基线：新账号", used(&backend), 0));
+
+        // 元数据先入云端行（file_key 仍空，不该计入）
+        backend.push_books(&[mk_book(false)]).expect("push A");
+        results.push(("push 元数据(未传文件)", used(&backend), 0));
+
+        // 场景1：签了上传地址但从不真传 → 不该计入
+        let phantom = b"phantom never-uploaded object".to_vec();
+        backend
+            .sign_upload_url(&format!("books/{}.pdf", crate::sha256_of_bytes(&phantom)), 1000)
+            .expect("sign put");
+        results.push(("场景1 签了没传", used(&backend), 0));
+
+        // 场景2：真上传一次 → 配额 = 文件大小
+        backend.upload_book_file(&hash_a, &data_a).expect("upload A");
+        results.push(("场景2 上传一次", used(&backend), flen));
+
+        // 场景4：重传同一文件 → 配额不翻倍
+        backend.upload_book_file(&hash_a, &data_a).expect("re-upload A");
+        results.push(("场景4 重传同文件", used(&backend), flen));
+
+        // 场景3：上传封面 → 封面不计入配额（file_size 只记正文）
+        backend.upload_cover_file(&hash_a, &cover_a).expect("upload cover A");
+        results.push(("场景3 上传封面", used(&backend), flen));
+        backend.upload_cover_file(&hash_a, &cover_a).expect("re-upload cover A");
+        results.push(("场景3b 封面重传", used(&backend), flen));
+
+        // 场景5：删除（推墓碑 deleted=true）→ 配额回落到 0
+        backend.push_books(&[mk_book(true)]).expect("push deleted");
+        results.push(("场景5 删除回落", used(&backend), 0));
+
+        eprintln!("[quota-test] 结果（实测 / 期望）：");
+        let mut bad = 0;
+        for (name, obs, exp) in &results {
+            let ok = obs == exp;
+            if !ok {
+                bad += 1;
+            }
+            eprintln!("  {} {name}: 实测={obs} 期望={exp}", if ok { "✓" } else { "✗" });
+        }
+        assert_eq!(bad, 0, "{bad} 个场景配额不符（见上方 ✗）");
+        eprintln!("[quota-test] 5 场景全部通过 ✓");
+    }
+
     #[test]
     fn unix_ms_to_rfc3339_handles_epoch_boundary_and_zero_padding() {
         let actual = unix_ms_to_rfc3339(7).expect("format epoch");
