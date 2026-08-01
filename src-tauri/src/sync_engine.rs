@@ -186,12 +186,16 @@ pub(crate) fn merge_remote_books(
          )",
     )?;
     let mut update_stmt = db.prepare(
+        // 注意：**不动 cloud_state**（P1-B）。文件本地性（local/uploading/synced/remote）
+        // 取决于本机是否真有文件本体，纯元数据合并无从得知，不该改它。旧代码无条件置
+        // 'remote'——另端 push 进度/元数据 bump updated_at 后，本端 pull→merge 就把本已
+        // synced（文件在本机）的书打回 remote → 显示云端、点开重下。insert 分支置 remote
+        // 是对的（新书来自云端、本机无文件），update 分支保持原状即可。
         "UPDATE books
          SET title = ?2,
              deleted = ?3,
              updated_at = ?4,
              synced_at = ?4,
-             cloud_state = 'remote',
              cover_key = COALESCE(?5, cover_key)
          WHERE id = ?1",
     )?;
@@ -555,7 +559,49 @@ mod tests {
         assert_eq!(row.0, "远端新");
         assert_eq!(row.1, 300);
         assert_eq!(row.2, 300);
-        assert_eq!(row.3, "remote");
+        // P1-B：本地有文件（'local'）的书被远端元数据更新时，绝不能被打回 'remote'
+        // （否则显示云端、点开重下）。合并只动元数据，不动文件本地性。
+        assert_eq!(row.3, "local");
+    }
+
+    #[test]
+    fn merge_books_p1b_已下载的书不被元数据更新打回云端() {
+        // 组2 回归：另端 push 进度/元数据 bump updated_at → 本端 pull→merge 更新时，
+        // 本已 synced（文件在本机）的书必须保持 synced，不能降级为 remote 触发重下。
+        let db = memory_db();
+        insert_book_row(&db, "h1", "已下载", 8, 200, 200, 0);
+        set_cloud_state(&db, "h1", "synced").unwrap();
+
+        let stats = merge_remote_books(&db, &[cloud_book("h1", "远端改名", 300, false)], 0).unwrap();
+
+        assert_eq!(stats.updated, 1);
+        let (title, state): (String, String) = db
+            .query_row(
+                "SELECT title, cloud_state FROM books WHERE hash = 'h1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "远端改名", "元数据仍按 LWW 采用远端");
+        assert_eq!(state, "synced", "文件在本机的书不得被打回 remote");
+    }
+
+    #[test]
+    fn merge_books_未下载的远端书更新后仍是_remote() {
+        // 对称保证：本机确无文件（'remote'）的书，元数据更新后仍是 remote，供用户下载。
+        let db = memory_db();
+        insert_book_row(&db, "h1", "云端书", 8, 200, 200, 0);
+        set_cloud_state(&db, "h1", "remote").unwrap();
+
+        let stats = merge_remote_books(&db, &[cloud_book("h1", "云端书改名", 300, false)], 0).unwrap();
+
+        assert_eq!(stats.updated, 1);
+        let state: String = db
+            .query_row("SELECT cloud_state FROM books WHERE hash = 'h1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(state, "remote");
     }
 
     #[test]
