@@ -560,9 +560,11 @@ struct BookUpsertRow {
     title: String,
     author: Option<String>,
     page_count: Option<i64>,
-    file_size: i64,
-    // 元数据 push 恒不带这两列（collect_dirty 恒 None）：省略后 PostgREST merge-duplicates
-    // 不更新缺失列，避免把 upload_*_file 已 PATCH 的 file_key/cover_key 抹成 null。
+    // 元数据 push 恒不带 file_size/file_key/cover_key（collect_dirty 恒 None）：省略后
+    // PostgREST merge-duplicates 不更新缺失列，避免把 upload_*_file 已 PATCH 的真实值抹掉。
+    // file_size 尤其致命：抹回 0 会让配额触发器 SUM 归零（P0-A 回归）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_size: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cover_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -603,7 +605,7 @@ impl BookPullRow {
             title: self.title,
             author: self.author,
             page_count: self.page_count,
-            file_size: self.file_size,
+            file_size: Some(self.file_size),
             cover_key: self.cover_key,
             file_key: self.file_key,
             updated_at: rfc3339_to_unix_ms(&self.updated_at).map_err(SyncError::Other)?,
@@ -1031,7 +1033,8 @@ mod tests {
                 title: "P5 测试书".into(),
                 author: None,
                 page_count: None,
-                file_size: bytes.len() as i64,
+                // 元数据 push 不带 file_size（真实大小由 upload_book_file 的 PATCH 回填）
+                file_size: None,
                 cover_key: None,
                 file_key: None,
                 updated_at: now,
@@ -1090,7 +1093,8 @@ mod tests {
             title: "配额测试书A".into(),
             author: None,
             page_count: None,
-            file_size: flen,
+            // 模拟真实元数据 push：恒不带 file_size（否则会抹掉云端已记的真实大小）
+            file_size: None,
             cover_key: None,
             file_key: None,
             updated_at: crate::now_ms(),
@@ -1120,6 +1124,12 @@ mod tests {
         // 场景4：重传同一文件 → 配额不翻倍
         backend.upload_book_file(&hash_a, &data_a).expect("re-upload A");
         results.push(("场景4 重传同文件", used(&backend), flen));
+
+        // 场景6（P0-A 回归守卫）：上传后再 push 元数据（模拟翻页 bump updated_at）
+        // → 绝不能抹掉云端 file_size，配额必须仍等于 flen。
+        // 改前 BookUpsertRow.file_size 无 skip_serializing_if，此处会把 file_size 覆盖成 0 → 配额归零。
+        backend.push_books(&[mk_book(false)]).expect("re-push meta");
+        results.push(("场景6 传后再push元数据", used(&backend), flen));
 
         // 场景3：上传封面 → 封面不计入配额（file_size 只记正文）
         backend.upload_cover_file(&hash_a, &cover_a).expect("upload cover A");

@@ -38,8 +38,9 @@ pub(crate) fn collect_dirty(
             title: title.clone(),
             author: None,
             page_count: None,
-            // 本地暂时没有文件大小列，阶段 5 再接真实值。
-            file_size: 0,
+            // 元数据 push 恒不带 file_size：省略后触发器不会把云端真实大小抹成 0
+            // （file_size 由 upload_book_file 的 PATCH 独占回填，同 file_key/cover_key）。
+            file_size: None,
             cover_key: None,
             file_key: None,
             updated_at: *updated_at,
@@ -406,7 +407,7 @@ mod tests {
             title: title.to_string(),
             author: None,
             page_count: None,
-            file_size: 0,
+            file_size: None,
             cover_key: None,
             file_key: None,
             updated_at,

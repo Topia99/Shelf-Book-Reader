@@ -17,8 +17,10 @@ pub struct CloudBook {
     pub author: Option<String>,
     /// 总页数，可为空以兼容尚未解析完成的书籍。
     pub page_count: Option<i64>,
-    /// 原始文件字节数，用于配额统计与上传校验。
-    pub file_size: i64,
+    /// 原始文件字节数，用于配额统计与上传校验。`None` 表示本次不写该列
+    /// （元数据 push 恒不带 file_size，由 upload_book_file 的 PATCH 独占回填；
+    /// 否则会把云端已记的真实大小抹回 0，触发器 SUM 归零 → 配额清零）。
+    pub file_size: Option<i64>,
     /// 封面对象键，可为空表示尚未上传或无封面。
     pub cover_key: Option<String>,
     /// 原文件对象键，可为空表示仅同步元数据未同步文件。
