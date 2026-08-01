@@ -45,6 +45,21 @@ const SORT_LABELS: Record<SortKey, string> = {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/**
+ * 前端超时兜底（P2 B1）：到点即 reject，让转轮停下并提示，不再干等后端 channel
+ * 超时（下载 180s / 刷新 60s）。后端 connect_timeout 已能秒级快失败，这里是防
+ * 「后端真的挂住」的安全网。底层 invoke 不会被取消，继续跑完无害——下载若稍后成功，
+ * 文件落库后同步引擎 emit library-changed，书库自愈刷新为本地。
+ */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    sleep(ms).then(() =>
+      Promise.reject(new Error("网络无响应，已停止；恢复网络后可重试"))
+    ),
+  ]) as Promise<T>;
+}
+
 export default function Library({ onOpenBook }: Props) {
   /** 点开云端书（remote）：按需下载文件本体，完成后打开；已在下载则忽略重复点击 */
   async function tryOpenBook(book: Book) {
@@ -57,7 +72,7 @@ export default function Library({ onOpenBook }: Props) {
       setDownloading(new Set(downloadingRef.current));
       pushNotice("info", `正在下载《${book.title}》…`);
       try {
-        await syncDownloadBook(book.hash);
+        await withTimeout(syncDownloadBook(book.hash), 25000);
         const fresh = await listBooks(sort, query);
         setBooks(fresh);
         const opened = fresh.find((b) => b.hash === book.hash);
@@ -127,7 +142,7 @@ export default function Library({ onOpenBook }: Props) {
     setPullY(0);
     // 后台抓云与"保底转一圈"并行：syncRefreshNow 已是 (async) 命令跑在独立线程，
     // 主线程空闲让转轮平滑旋转；至少 800ms（一整圈）避免"闪一下就没"。
-    const sync = syncRefreshNow().catch((e) =>
+    const sync = withTimeout(syncRefreshNow(), 20000).catch((e) =>
       pushNotice("error", `刷新失败：${String(e)}`)
     );
     await Promise.all([sync, sleep(800)]);

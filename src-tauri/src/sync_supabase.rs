@@ -21,22 +21,36 @@ const BODY_SUMMARY_LIMIT: usize = 160;
 pub struct SupabaseBackend {
     base_url: String,
     anon_key: String,
+    /// 元数据/签名请求：短连接超时快失败（离线秒级返回）+ 30s 总超时。
     client: Client,
+    /// 文件本体传输（R2 PUT/GET/DELETE、封面）：同样短连接超时快失败，但总超时放宽到
+    /// 300s，避免大书在慢网络上被 30s 误杀（A2）。
+    file_client: Client,
     session: Option<AuthSession>,
 }
 
 impl SupabaseBackend {
     /// 创建新的 Supabase 后端实例。
     pub fn new(base_url: String, anon_key: String) -> Self {
+        // connect_timeout 是关键：离线时连接阶段 ≤8s 快失败，而非朝 30s 总超时漂移
+        // （多个串行请求叠起来就是分钟级卡死 = P2 断网转轮不停的根因）。
         let client = Client::builder()
+            .connect_timeout(Duration::from_secs(8))
             .timeout(Duration::from_secs(30))
             .build()
             .expect("reqwest blocking client build failed");
+        // 文件传输专用：连接超时同样 8s 快失败，但总超时放宽到 300s（大书慢网不误杀）。
+        let file_client = Client::builder()
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .expect("reqwest blocking file client build failed");
 
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             anon_key,
             client,
+            file_client,
             session: None,
         }
     }
@@ -356,11 +370,11 @@ impl SupabaseBackend {
         let signed = self.sign_upload_url(&key, bytes.len() as i64)?;
 
         let resp = self
-            .client
+            .file_client
             .put(&signed.url)
             .body(bytes.to_vec())
             .send()
-            .map_err(|e| SyncError::Network(format!("R2 上传失败：{e}")))?;
+            .map_err(|e| map_transfer_error("R2 上传失败", e))?;
         if !resp.status().is_success() {
             return Err(SyncError::Network(format!("R2 上传返回 {}", resp.status())));
         }
@@ -386,10 +400,10 @@ impl SupabaseBackend {
         let key = self.book_object_key(sha256)?;
         let signed = self.sign_download_url(&key)?;
         let resp = self
-            .client
+            .file_client
             .get(&signed.url)
             .send()
-            .map_err(|e| SyncError::Network(format!("R2 下载失败：{e}")))?;
+            .map_err(|e| map_transfer_error("R2 下载失败", e))?;
         if resp.status() == StatusCode::NOT_FOUND {
             return Err(SyncError::Other("远端文件尚未就绪".into()));
         }
@@ -398,7 +412,7 @@ impl SupabaseBackend {
         }
         resp.bytes()
             .map(|b| b.to_vec())
-            .map_err(|e| SyncError::Network(format!("R2 下载读取失败：{e}")))
+            .map_err(|e| map_transfer_error("R2 下载读取失败", e))
     }
 
     /// 封面对象键：covers/<sha256>.jpg（函数内部再加 {user_id}/ 前缀，同 book_object_key）。
@@ -425,10 +439,10 @@ impl SupabaseBackend {
         for key in [self.book_object_key(sha256)?, self.cover_object_key(sha256)?] {
             let signed = self.sign_delete_url(&key)?;
             let resp = self
-                .client
+                .file_client
                 .delete(&signed.url)
                 .send()
-                .map_err(|e| SyncError::Network(format!("R2 删除失败：{e}")))?;
+                .map_err(|e| map_transfer_error("R2 删除失败", e))?;
             if !resp.status().is_success() && resp.status() != StatusCode::NOT_FOUND {
                 return Err(SyncError::Network(format!("R2 删除返回 {}", resp.status())));
             }
@@ -442,11 +456,11 @@ impl SupabaseBackend {
         let signed = self.sign_upload_url(&key, bytes.len() as i64)?;
 
         let resp = self
-            .client
+            .file_client
             .put(&signed.url)
             .body(bytes.to_vec())
             .send()
-            .map_err(|e| SyncError::Network(format!("R2 封面上传失败：{e}")))?;
+            .map_err(|e| map_transfer_error("R2 封面上传失败", e))?;
         if !resp.status().is_success() {
             return Err(SyncError::Network(format!(
                 "R2 封面上传返回 {}",
@@ -474,10 +488,10 @@ impl SupabaseBackend {
         let key = self.cover_object_key(sha256)?;
         let signed = self.sign_download_url(&key)?;
         let resp = self
-            .client
+            .file_client
             .get(&signed.url)
             .send()
-            .map_err(|e| SyncError::Network(format!("R2 封面下载失败：{e}")))?;
+            .map_err(|e| map_transfer_error("R2 封面下载失败", e))?;
         if resp.status() == StatusCode::NOT_FOUND {
             return Err(SyncError::Other("远端封面尚未就绪".into()));
         }
@@ -489,7 +503,7 @@ impl SupabaseBackend {
         }
         resp.bytes()
             .map(|b| b.to_vec())
-            .map_err(|e| SyncError::Network(format!("R2 封面下载读取失败：{e}")))
+            .map_err(|e| map_transfer_error("R2 封面下载读取失败", e))
     }
 
     /// 查询当前用户云存储配额（已用/上限字节，供设置页展示）。
@@ -693,8 +707,31 @@ fn parse_empty_response(
     Err(error_mapper(status, &body))
 }
 
+/// 离线/超时错误统一友好文案（P2 ②）：连接不上或超时时给用户能看懂的提示，
+/// 而非 reqwest 的英文原文；其余错误保留原文便于排查。
+fn friendly_network_message(error: &reqwest::Error) -> Option<&'static str> {
+    if error.is_connect() {
+        Some("网络不可用，请检查网络连接后重试")
+    } else if error.is_timeout() {
+        Some("网络响应超时，请稍后重试")
+    } else {
+        None
+    }
+}
+
 fn map_network_error(error: reqwest::Error) -> SyncError {
-    SyncError::Network(error.to_string())
+    match friendly_network_message(&error) {
+        Some(msg) => SyncError::Network(msg.to_string()),
+        None => SyncError::Network(error.to_string()),
+    }
+}
+
+/// 文件传输（R2 PUT/GET/DELETE）错误映射：离线/超时给友好文案，其余带上下文前缀。
+fn map_transfer_error(context: &str, error: reqwest::Error) -> SyncError {
+    match friendly_network_message(&error) {
+        Some(msg) => SyncError::Network(msg.to_string()),
+        None => SyncError::Network(format!("{context}：{error}")),
+    }
 }
 
 fn map_http_error(status: StatusCode, body: &str) -> SyncError {
