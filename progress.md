@@ -100,7 +100,7 @@
 | P5-2 | 封面缩略图上传 | ✅ | 实现+单测(3)+**真实 R2 封面往返验证通过**。封面改 480px JPEG（renderCoverJpeg，白底防透明变黑；入库 Library + 首开 controller 两处生成）；v3 迁移加本地 `cover_key` 列追踪同步态；sync_supabase 加 `upload_cover_file`(sign PUT covers/<hash>.jpg+PATCH cover_key)/`download_cover_file`；sync_engine 加 collect_uploadable_covers/collect_downloadable_covers/set_cover_key/set_cover_path + merge 持久化远端 cover_key；run_cycle 加封面上传/下载趟(best-effort 失败下轮重试)。**顺带修 P5-1/P5-2 共有潜伏 bug**：BookUpsertRow 的 cover_key/file_key 加 `skip_serializing_if none`——collect_dirty 恒 None，原会让每次元数据 push 把云端已 PATCH 的 file_key/cover_key 抹成 null（另端就下不了）。 |
 | P5-3 | 云书架 + 按需下载 | 🔄 | 下载核心完成 + R2 往返验证（download_book_file 已在 e2e 测试拉回校验一致）：`sync_download_book` 命令（reply-style，180s）→ 推导 `books/<hash>.pdf` 键 → 预签名 GET → 校验 SHA-256 → 写库 → synced；前端 Library remote 书点击即下载（下载中角标+防重+完成打开）。**待**：真机/双端 UI 联调（另一端登录看云端书→点击下载打开）+ 封面显示（P5-2） |
 | P5-4 | 传输策略设置页 | ✅ | 第一轮：配额展示（get_quota→user_quota，AccountPanel 已用/上限+进度条）+ 自动上传开关（sync_meta 门控 upload_pending_files，关=仅元数据；「仅 Wi-Fi」因 iOS 无 Network Information API 用此替代）。**第二轮：配额双计修复**（TDD）——测试先注册全新账号跑 5 场景（签了没传/上传/重传/封面/删除），改前红（1000/1051/1102/1129/1156/1156）改后绿（0/51/51/51/51/0）。修法：迁移 20260725000001 加 `recompute_user_quota` 触发器（books 的 file_key/file_size/deleted 变化→bytes_used=SUM(file_size WHERE file_key NOT NULL AND NOT deleted)）+ 回填历史虚高；sign-url 去掉 PUT 预扣（只留超额检查）+ 去掉 delete HEAD 回扣（回落靠墓碑触发器）。已 `db push`+`functions deploy` 部署，5 场景测试实测全绿、原 e2e 无回归。 |
-| P5-5 | 四端联调 | 🚫 | P5-3, 阶段4 |
+| P5-5 | 四端联调 | 🔄 | 验收清单就绪，待用户跑：[docs/P5-5四端联调验收清单.md](docs/P5-5四端联调验收清单.md)——6 组（新设备书架浮现/按需下载+进度双向/多账号隔离/删书清云端/传输设置+配额/弱网边界）。MVP 范围外已注明（断点续传不做、配额满手动测不现实）。组 1~5 全绿即阶段 5 收口 |
 
 ## 多账号本地隔离（方案 A · bug 修复 epic）
 
