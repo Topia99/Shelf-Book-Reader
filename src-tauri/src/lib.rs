@@ -150,6 +150,10 @@ fn get_book_by_id(db: &Connection, id: i64) -> Result<Book, String> {
 fn revive_deleted_book_record(db: &Connection, id: i64, file_path: &str) -> rusqlite::Result<()> {
     // 复活 = 当全新本地书对待：重置进度与同步账本，否则旧进度诡异复活，
     // 且 cloud_state 残留 synced/remote 会让本地文件永不重新上传（MA-7）。
+    // cover_key/cover_path 也必须清（P0-B）：删除时封面 R2 对象已被 delete_book_file 删掉，
+    // 若残留 cover_key 非空，collect_uploadable_covers 的 `cover_key IS NULL` 条件会跳过它 →
+    // 封面永不重传、云端 cover_key 悬指已删对象 → 各端 404 丢封面。清空后开书 postProcessBook
+    // 重生封面 → cover_key 空 + cover_path 有 → 重新上传新封面对象。
     db.execute(
         "UPDATE books
          SET deleted = 0,
@@ -158,7 +162,9 @@ fn revive_deleted_book_record(db: &Connection, id: i64, file_path: &str) -> rusq
              added_at = datetime('now', 'localtime'),
              current_page = 1,
              synced_at = 0,
-             cloud_state = 'local'
+             cloud_state = 'local',
+             cover_key = NULL,
+             cover_path = NULL
          WHERE id = ?1",
         rusqlite::params![id, file_path, now_ms()],
     )?;
@@ -200,10 +206,20 @@ fn take_opened_urls(state: State<OpenedUrls>) -> Vec<String> {
 }
 
 #[tauri::command]
-fn add_books(paths: Vec<String>, state: State<AppState>) -> Vec<AddResult> {
+fn add_books(
+    paths: Vec<String>,
+    state: State<AppState>,
+    sync: State<sync_runtime::SyncHandle>,
+) -> Vec<AddResult> {
     let mut results = Vec::new();
     for p in paths {
         results.push(add_one_book(&p, &state));
+    }
+    // 有新入库/复活即立刻触发同步（对称 remove_book 的墓碑推送）。P0-B：复活的书
+    // 需尽快 push deleted=false + 重传文件/封面，否则拖到 ≤5min 心跳（首轮失败再 +5min
+    // ≈ 10min），期间其他端下载命中已删 R2 对象报 404。未登录/失败不影响本地入库。
+    if results.iter().any(|r| r.status == "added") {
+        let _ = sync.send(sync_runtime::SyncCommand::SyncNow);
     }
     results
 }
@@ -1153,19 +1169,29 @@ mod tests {
     fn readd_same_hash_revives_deleted_book() {
         let db = memory_library_db();
         let id = insert_test_book(&db, "cafebabe", "已删除旧书");
-        // 模拟删除前的状态：读到 42 页、已同步到云
+        // 模拟删除前的状态：读到 42 页、已同步到云、有封面（key+path）
         db.execute(
             "UPDATE books SET deleted = 1, current_page = 42, synced_at = 999,
-                              cloud_state = 'synced' WHERE id = ?1",
+                              cloud_state = 'synced', cover_key = 'covers/cafebabe.jpg',
+                              cover_path = 'covers/cafebabe.jpg' WHERE id = ?1",
             [id],
         )
         .unwrap();
 
         revive_deleted_book_record(&db, id, "books/cafebabe.pdf").unwrap();
 
-        let (deleted, file_path, page, synced_at, cloud_state): (i64, String, i64, i64, String) = db
+        let (deleted, file_path, page, synced_at, cloud_state, cover_key, cover_path): (
+            i64,
+            String,
+            i64,
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+        ) = db
             .query_row(
-                "SELECT deleted, file_path, current_page, synced_at, cloud_state
+                "SELECT deleted, file_path, current_page, synced_at, cloud_state,
+                        cover_key, cover_path
                  FROM books WHERE hash = 'cafebabe'",
                 [],
                 |row| {
@@ -1175,6 +1201,8 @@ mod tests {
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
                     ))
                 },
             )
@@ -1185,6 +1213,9 @@ mod tests {
         assert_eq!(page, 1);
         assert_eq!(synced_at, 0);
         assert_eq!(cloud_state, "local");
+        // P0-B：封面 key/path 必须清空，否则封面永不重传（cover_key IS NULL 条件跳过）
+        assert_eq!(cover_key, None);
+        assert_eq!(cover_path, None);
     }
 
     #[test]

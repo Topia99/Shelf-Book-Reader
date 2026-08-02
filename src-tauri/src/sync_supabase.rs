@@ -447,7 +447,28 @@ impl SupabaseBackend {
                 return Err(SyncError::Network(format!("R2 删除返回 {}", resp.status())));
             }
         }
-        Ok(())
+        // R2 对象已删，把云端行的 file_key/cover_key 一并置 null（P0-B 状态诚实）：
+        // 否则删除/复活 churn 后云端行仍指向已删对象 → 另端下载/取封面命中悬空 key 报 404。
+        // 置 null 后，行在文件重传（PATCH 回填 file_key）前不广告任何对象，另端得到干净的
+        // 「未就绪可重试」而非 404；与配额触发器也自洽（file_key null → 不计配额）。
+        self.clear_cloud_object_keys(sha256)
+    }
+
+    /// 把云端 books 行的 file_key/cover_key 置 null（删除清理 R2 对象后调用）。
+    fn clear_cloud_object_keys(&self, sha256: &str) -> Result<(), SyncError> {
+        let user_id = self
+            .session
+            .as_ref()
+            .map(|s| s.user_id.clone())
+            .ok_or(SyncError::Unauthorized)?;
+        let request = self.apply_auth(
+            self.client
+                .patch(self.rest_url(&format!(
+                    "/books?user_id=eq.{user_id}&sha256=eq.{sha256}"
+                )))
+                .json(&json!({ "file_key": null, "cover_key": null })),
+        )?;
+        self.send_empty(request)
     }
 
     /// 上传封面缩略图到 R2 并回填云端 books.cover_key。
